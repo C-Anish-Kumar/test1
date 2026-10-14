@@ -1,0 +1,75 @@
+# OpenStock self-hosted stack: app + MongoDB + self-hosted Inngest (background jobs).
+# Run ./setup.sh once, then: docker compose up -d --build
+
+x-inngest-keys: &inngest-keys
+  INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?run ./setup.sh first}
+  INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?run ./setup.sh first}
+
+services:
+  openstock:
+    build:
+      context: ./openstock
+      args:
+        OPENSTOCK_REF: ${OPENSTOCK_REF:-18310116ec04862619fc5c746dd65947a09b29b6}
+        NEXT_PUBLIC_FINNHUB_API_KEY: ${NEXT_PUBLIC_FINNHUB_API_KEY:-}
+        NEXT_PUBLIC_OPENSTOCK_DATA_MODE: ${NEXT_PUBLIC_OPENSTOCK_DATA_MODE:-cached}
+    image: openstock:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *inngest-keys
+      NODE_ENV: production
+      MONGODB_URI: mongodb://root:${MONGO_ROOT_PASSWORD:?run ./setup.sh first}@mongodb:27017/openstock?authSource=admin
+      # Point the Inngest SDK at the self-hosted server instead of Inngest Cloud
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_DEV: "0"
+    ports:
+      - "${OPENSTOCK_BIND:-127.0.0.1}:${OPENSTOCK_PORT:-3000}:3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?run ./setup.sh first}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  inngest:
+    image: inngest/inngest:v1.46.0
+    restart: unless-stopped
+    command: inngest start --sdk-url http://openstock:3000/api/inngest
+    environment:
+      <<: *inngest-keys
+    volumes:
+      - inngest-data:/root/.inngest
+    # Dashboard for runs and cron history; kept on localhost (use an SSH tunnel to view it remotely)
+    ports:
+      - "127.0.0.1:${INNGEST_UI_PORT:-8288}:8288"
+
+  # Optional automatic HTTPS: set DOMAIN in .env, then `docker compose --profile https up -d`
+  caddy:
+    image: caddy:2.11.7
+    profiles: ["https"]
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to openstock:3000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      - openstock
+
+volumes:
+  mongo-data:
+  inngest-data:
+  caddy-data:
