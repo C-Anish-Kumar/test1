@@ -50,3 +50,23 @@ overrides you need `OPENAI_API_KEY`. Results, the memory log and the cache go to
 - Keyless data sources (Yahoo, SEC EDGAR, Polymarket) work out of the box. FRED macro data needs
   `FRED_API_KEY`. SEC asks for a contact via `SEC_EDGAR_USER_AGENT`.
 - This is a research framework, not trading advice. It does not place real orders.
+
+## REA (Reverse Engineer Anything) MCP server
+
+This repo registers [REA](https://github.com/morluto/rea) as a project MCP
+server in `.mcp.json` (pinned to `rea-agents@6.5.0`, launched via `npx`) and
+ships its workflow skill in `.claude/skills/reverse-engineer-anything`. Claude
+Code picks both up when opened in this repo (approve the project MCP server
+when prompted). Requires Node.js `^22.19` or `^24.11`.
+
+Static JavaScript/Electron analysis works out of the box. Native binary
+analysis needs an engine: set `GHIDRA_INSTALL_DIR` (Ghidra 12.1.x), install
+Hopper, or configure IDA via `REA_IDA_MCP_CONFIG`. Check readiness with:
+
+```bash
+npx -y rea-agents@6.5.0 doctor --json
+```
+
+To upgrade, bump the version in `.mcp.json` and refresh the skill with
+`npx rea-agents@<version> setup --client claude_code`, then copy
+`~/.claude/skills/reverse-engineer-anything` back into `.claude/skills/`.
