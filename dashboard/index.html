@@ -855,7 +855,7 @@ function renderExp() {
 $$("#e-w, #e-rr, #e-r").forEach(el => el.addEventListener("input", renderExp));
 
 /* ---------- Live data: Interactive Brokers connector ---------- */
-const IB = "Interactive Brokers IBKR";
+const IB = "Interactive Brokers (IBKR)";
 const OPEN = T(9, 30), CLOSE = T(16, 0), BAR = 5 * 60e3;
 const Live = {
   mcp: null, conids: {},
