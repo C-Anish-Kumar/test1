@@ -148,6 +148,15 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
 .live select { width: auto }
 .live-msg { font-size: .82rem; color: var(--muted) }
 .live-msg.err { color: var(--bad) }
+.alerts { display: flex; flex-direction: column; gap: 8px; padding-block: 12px 0 }
+.alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--good); background: var(--good-soft); color: var(--ink) }
+.alert.short { border-color: var(--bad); background: var(--bad-soft) }
+.alert strong { font-family: var(--f-display); font-stretch: 85%; font-size: 1.05rem }
+.alert .lv { font-family: var(--f-mono); font-size: .85rem }
+.alert .row { margin-left: auto }
+.alog { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; font-size: .85rem }
+.alog li { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--line) }
+.alog li:last-child { border-bottom: 0 }
 .toast { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 10px 14px; border-radius: 6px; font-size: .88rem; z-index: 20 }
 .confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: var(--bad-soft); color: var(--bad); border-radius: 6px; font-size: .85rem }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important } }
@@ -169,6 +178,7 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
 </header>
 
 <div class="wrap">
+  <div class="alerts" id="alertBar" aria-live="polite"></div>
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button role="tab" data-tab="today" id="tab-today">Today</button>
     <button role="tab" data-tab="setup" id="tab-setup">Setup check</button>
@@ -248,13 +258,17 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
     <!-- WATCHLIST -->
     <section data-pane="watchlist" class="grid" hidden>
       <div class="panel c12">
-        <div class="panel-head"><h2>Pre-market screen</h2><div class="row"><span class="muted" style="font-size:.85rem">Pass: pre-mkt vol &gt; 500k, daily ATR ≥ $2.00, catalyst noted</span><button class="btn" id="addWatch">Add ticker</button><button class="btn primary" id="scanWatch" data-live hidden>Fill &amp; scan from IBKR</button><label class="chk" data-live hidden><input type="checkbox" id="scanAuto">Rescan every 5 min</label></div></div>
+        <div class="panel-head"><h2>Pre-market screen</h2><div class="row"><span class="muted" style="font-size:.85rem">Pass: pre-mkt vol &gt; 500k, daily ATR ≥ $2.00, catalyst noted</span><button class="btn" id="addWatch">Add ticker</button><button class="btn primary" id="scanWatch" data-live hidden>Fill &amp; scan from IBKR</button><label class="chk" data-live hidden><input type="checkbox" id="scanAuto">Auto-scan &amp; alert every 5 min</label><label class="chk" data-live hidden><input type="checkbox" id="alertSound">Sound</label></div></div>
         <div class="tablebox"><table>
           <thead><tr><th>Ticker</th><th>Signal (last 5m)</th><th class="num">Pre-mkt vol</th><th class="num">Daily ATR</th><th>Catalyst</th><th>vs 200 EMA</th><th class="num">PDH</th><th class="num">PDL</th><th class="num">PMH</th><th class="num">PML</th><th>Screen</th><th></th></tr></thead>
           <tbody id="watchBody"></tbody>
         </table></div>
         <div class="muted" style="font-size:.82rem" id="watchNote"></div>
         <div class="live-msg" id="scanMsg"></div>
+      </div>
+      <div class="panel c12" data-live hidden>
+        <div class="panel-head"><h2>Today's alerts</h2><span class="muted" style="font-size:.82rem">A new valid setup on a just-closed 5m bar raises an alert once. Keep this page open; alerts appear on any tab.</span></div>
+        <ul class="alog" id="alertLog"></ul>
       </div>
     </section>
 
@@ -866,6 +880,21 @@ const Live = {
       return (await this.mcp.callTool(IB, tool, input, opts)).payload;
     }
   },
+  // Settle the connector permission and make one call alone before any parallel calls:
+  // several first calls at once can each hit an unanswered consent prompt and fail.
+  ok: false,
+  async ready() {
+    if (this.ok) return;
+    const perms = await window.claude.use("permissions").catch(() => null);
+    if (perms) {
+      const name = "mcp:" + IB;
+      let st = await perms.state(name).catch(() => "unavailable");
+      if (st === "prompt") st = (await perms.request([name]).catch(() => ({})))[name] || st;
+      if (st === "denied") throw { code: "denied" };
+    }
+    await this.call("search_contracts", { query: "SPY" }, 7 * 864e5);
+    this.ok = true;
+  },
   async conid(sym) {
     if (this.conids[sym]) return this.conids[sym];
     const res = await this.call("search_contracts", { query: sym }, 7 * 864e5);
@@ -894,12 +923,13 @@ function liveErr(e) {
     case "server_not_connected": case "server_not_found": return "Add the Interactive Brokers connector in claude.ai Settings → Connectors.";
     case "selection_required": return "Choose which Interactive Brokers connector this page uses (claude.ai asks when the page opens).";
     case "not_in_manifest": case "approval_required": case "consent_required": return "This page isn't allowed to use Interactive Brokers yet. Allow it from the page's Permissions menu, then pull again.";
+    case "denied": return "Interactive Brokers is turned off for this page. Turn it on in the page's Permissions menu, then pull again.";
     case "blocked_by_policy": return "Your organization blocks the Interactive Brokers connector here.";
     case "server_unavailable": case "rate_limited": return "Interactive Brokers didn't answer. Try again in a minute.";
     case "tool_error": return "Interactive Brokers refused the request: " + (e.message || "no detail") + ". Check your market data subscription.";
     case "no_contract": case "no_data": return e.message;
     case "not_granted": case "capability_disabled": case "capability_removed": Live.setAvailable(false); return "Live data isn't available in this view.";
-    default: return "Interactive Brokers request failed" + (code ? ` (${code})` : "") + ".";
+    default: return "Interactive Brokers request failed" + (code ? ` (${code}${e.message ? ": " + String(e.message).slice(0, 160) : ""})` : "") + ". Try again; if it repeats, reconnect the connector in claude.ai Settings → Connectors.";
   }
 }
 function setLiveMsg(sel, text, err) { const el = $(sel); el.textContent = text; el.classList.toggle("err", !!err); }
@@ -949,6 +979,7 @@ async function pullSetup(quiet) {
   $("#livePull").disabled = true;
   if (!quiet) setLiveMsg("#liveMsg", `Pulling ${sym} from Interactive Brokers…`);
   try {
+    await Live.ready();
     const [intra, htf] = await Promise.all([Live.intraday(sym), htfFor(sym, tf)]);
     const x = computeLive(intra, htf, null, Date.now());
     if (!x.bar) throw { code: "no_data", message: `No completed regular-session 5m bars for ${sym} yet.` };
@@ -956,6 +987,7 @@ async function pullSetup(quiet) {
     Object.entries({ time: fmtMin(b.mins + 5), ema: p2(x.ema), vwap: p2(x.vwap), o: p2(b.o), h: p2(b.h), l: p2(b.l), c: p2(b.c), vol: String(Math.round(b.v)), vsma: Number.isFinite(x.vsma) ? String(Math.round(x.vsma)) : "", atr: Number.isFinite(x.atr) ? x.atr.toFixed(3) : "", swing: "" })
       .forEach(([k, v]) => $("#s-" + k).value = v);
     renderSetup();
+    if (lastPlan?.valid) Alerts.fire({ sym, dir: lastPlan.dir, trigger: lastPlan.trigger, warns: lastPlan.rules.filter(r => r.ok === "warn").length, barT: b.t, at: `${fmtMin(b.mins + 5)} ET`, entry: lastPlan.entry, stop: lastPlan.stop, target: lastPlan.target, shares: lastPlan.shares, setup: null });
     const b2 = $("#liveBadge"); b2.className = "badge st-good"; b2.textContent = "Live · IBKR";
     setLiveMsg("#liveMsg", `${sym} bar ${b.date} ${fmtMin(b.mins)}–${fmtMin(b.mins + 5)} ET · ${tf === "D" ? "Daily" : "1H"} EMA from ${htf.length} bars · pulled ${etNow().hms} ET`);
   } catch (e) {
@@ -968,13 +1000,14 @@ $("#livePull").addEventListener("click", () => pullSetup());
 $("#live-tf").addEventListener("change", e => { try { localStorage.setItem(LS_KEY + "-tf", e.target.value); } catch {} });
 $("#liveAuto").addEventListener("change", e => {
   clearInterval(autoTimer); autoTimer = null;
-  if (e.target.checked) { pullSetup(); autoTimer = setInterval(() => { if (!document.hidden) pullSetup(true); }, 60e3); }
+  if (e.target.checked) { pullSetup(); autoTimer = setInterval(() => pullSetup(true), 60e3); }
 });
 
 $("#regimePull").addEventListener("click", async () => {
   const tf = $("#live-tf").value, btn = $("#regimePull"); btn.disabled = true;
   setLiveMsg("#regimeMsg", "Pulling SPY and QQQ…");
   try {
+    await Live.ready();
     const reg = { ...(dayDoc().regime || {}) }, notes = [];
     for (const t of IDX) {
       const bars = await htfFor(t, tf), e = ema(bars.map(b => b.c), 200), last = bars[bars.length - 1]?.c;
@@ -1003,6 +1036,8 @@ async function scanWatch(quiet) {
   const rows = watchRows().map(r => ({ ...r })).filter(r => r.t);
   if (!rows.length) { setLiveMsg("#scanMsg", "Add tickers first.", true); return; }
   scanning = true; $("#scanWatch").disabled = true;
+  try { await Live.ready(); }
+  catch (e) { setLiveMsg("#scanMsg", liveErr(e), true); scanning = false; $("#scanWatch").disabled = false; return; }
   const tf = $("#live-tf").value, base = readSetup();
   let done = 0, failed = 0, firstErr = null;
   const work = rows.map(r => async () => {
@@ -1018,27 +1053,93 @@ async function scanWatch(quiet) {
       if (x.bar) {
         const b = x.bar, ev = evaluate({ ...base, ticker: sym, time: fmtMin(b.mins + 5), ema: x.ema, vwap: x.vwap, o: b.o, h: b.h, l: b.l, c: b.c, vol: b.v, vsma: x.vsma, atr: x.atr, swing: "" });
         const bad = (ev.rules || []).filter(q => q.ok === "bad").map(q => q.title);
-        liveSig[sym] = { ok: !ev.incomplete && ev.fails === 0, warns: ev.warns, dir: ev.dir, trigger: ev.trigger, at: `${fmtMin(b.mins + 5)} ET`, why: ev.incomplete ? "not enough bars" : bad[0] || "", setup: { time: fmtMin(b.mins + 5), ema: p2(x.ema), vwap: p2(x.vwap), o: p2(b.o), h: p2(b.h), l: p2(b.l), c: p2(b.c), vol: String(Math.round(b.v)), vsma: Number.isFinite(x.vsma) ? String(Math.round(x.vsma)) : "", atr: Number.isFinite(x.atr) ? x.atr.toFixed(3) : "" } };
+        liveSig[sym] = { ok: !ev.incomplete && ev.fails === 0, warns: ev.warns, dir: ev.dir, trigger: ev.trigger, at: `${fmtMin(b.mins + 5)} ET`, barT: b.t, plan: ev.plan, why: ev.incomplete ? "not enough bars" : bad[0] || "", setup: { time: fmtMin(b.mins + 5), ema: p2(x.ema), vwap: p2(x.vwap), o: p2(b.o), h: p2(b.h), l: p2(b.l), c: p2(b.c), vol: String(Math.round(b.v)), vsma: Number.isFinite(x.vsma) ? String(Math.round(x.vsma)) : "", atr: Number.isFinite(x.atr) ? x.atr.toFixed(3) : "" } };
       } else liveSig[sym] = { ok: false, at: "pre-open", why: "no session bars yet" };
     } catch (e) { failed++; firstErr = firstErr || e; liveSig[sym] = { err: liveErr(e) }; }
     done++; if (!quiet) setLiveMsg("#scanMsg", `Scanning ${done}/${rows.length}…`);
   });
-  // Two at a time keeps the connector responsive.
-  const queue = work.slice();
-  await Promise.all([0, 1].map(async () => { while (queue.length) await queue.shift()(); }));
+  // One ticker at a time keeps the connector responsive.
+  for (const w of work) await w();
   const cur = watchRows().map(r => ({ ...r }));
   for (const r of cur) { const u = rows.find(x => x.t === r.t); if (u) Object.assign(r, { pmv: u.pmv, atr: u.atr, trend: u.trend, pdh: u.pdh, pdl: u.pdl, pmh: u.pmh, pml: u.pml }); }
   saveWatch(cur); renderWatch();
+  for (const r of rows) {
+    const sym = r.t.toUpperCase(), g = liveSig[sym];
+    if (g?.ok && g.plan) Alerts.fire({ sym, dir: g.dir, trigger: g.trigger, warns: g.warns, barT: g.barT, at: g.at, entry: g.plan.entry, stop: g.plan.stop, target: g.plan.target, shares: g.plan.shares, setup: g.setup });
+  }
   const hits = rows.filter(r => liveSig[r.t.toUpperCase()]?.ok).length;
   setLiveMsg("#scanMsg", failed ? `${failed} of ${rows.length} failed: ${liveErr(firstErr)}` : `Scanned ${rows.length} at ${etNow().hms} ET · ${hits} valid setup${hits === 1 ? "" : "s"} on the last 5m bar. Catalyst stays manual.`, failed > 0);
   scanning = false; $("#scanWatch").disabled = false;
 }
 let scanTimer = null;
 $("#scanWatch").addEventListener("click", () => scanWatch());
+// Scan 20 s after each 5m bar closes so a new setup alerts as soon as IBKR has the bar.
+function scheduleScan() {
+  clearTimeout(scanTimer);
+  const wait = BAR - (Date.now() % BAR) + 20e3;
+  scanTimer = setTimeout(() => { if ($("#scanAuto").checked) { scanWatch(true); scheduleScan(); } }, wait);
+}
 $("#scanAuto").addEventListener("change", e => {
-  clearInterval(scanTimer); scanTimer = null;
-  if (e.target.checked) { scanWatch(); scanTimer = setInterval(() => { if (!document.hidden) scanWatch(true); }, 5 * 60e3); }
+  clearTimeout(scanTimer); scanTimer = null;
+  if (e.target.checked) { Alerts.unlock(); scanWatch(); scheduleScan(); }
 });
+
+/* ---------- Alerts ---------- */
+const Alerts = {
+  ctx: null, open: [],
+  unlock() {
+    if (this.ctx || !$("#alertSound").checked) return;
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+  },
+  chime() {
+    if (!$("#alertSound").checked || !this.ctx) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      [[880, 0], [1320, 0.16]].forEach(([f, d]) => {
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.frequency.value = f; o.type = "sine";
+        g.gain.setValueAtTime(0.0001, t0 + d); g.gain.exponentialRampToValueAtTime(0.25, t0 + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.3);
+        o.connect(g).connect(this.ctx.destination); o.start(t0 + d); o.stop(t0 + d + 0.32);
+      });
+    } catch {}
+  },
+  fire(a) {
+    // Only bars that closed in the last 10 minutes: no alerts from stale or after-hours data.
+    if (!(a.barT + BAR >= Date.now() - 10 * 60e3)) return;
+    const key = `${a.sym}|${a.barT}`, log = dayDoc().alerts || [];
+    if (log.some(x => x.key === key)) return;
+    const rec = { key, sym: a.sym, dir: a.dir, trigger: a.trigger, at: a.at, warns: a.warns || 0, entry: fx(a.entry), stop: fx(a.stop), target: fx(a.target), shares: a.shares, raised: etNow().hms };
+    putDay({ alerts: [...log, rec].slice(-60) });
+    this.open.push({ ...rec, setup: a.setup });
+    this.chime(); renderAlerts();
+    toast(`Setup: ${a.sym} ${a.dir} ${a.trigger}`);
+  },
+};
+function renderAlerts() {
+  $("#alertBar").innerHTML = Alerts.open.map((a, i) => `<div class="alert ${a.dir === "Short" ? "short" : ""}" role="alert">
+    <strong>${esc(a.sym)} · ${esc(a.dir)} ${esc(a.trigger)}</strong>
+    <span class="lv">bar ${esc(a.at)} · entry ${esc(a.entry)} · stop ${esc(a.stop)} · target ${esc(a.target)} · ${fint(a.shares)} sh</span>
+    ${a.warns ? `<span class="badge st-warn">${a.warns} caution${a.warns > 1 ? "s" : ""}</span>` : ""}
+    <div class="row"><button class="btn" data-aopen="${i}">Open setup</button><button class="btn ghost" data-adis="${i}">Dismiss</button></div></div>`).join("")
+    + (Alerts.open.length > 2 ? `<div class="row" style="justify-content:flex-end"><button class="btn ghost" data-adis="all">Dismiss all ${Alerts.open.length}</button></div>` : "");
+  const log = (dayDoc().alerts || []).slice().reverse();
+  $("#alertLog").innerHTML = log.length ? log.map(a => `<li><span class="mono muted">${esc(a.raised.slice(0, 5))}</span><span><b>${esc(a.sym)}</b> ${esc(a.dir)} ${esc(a.trigger)} <span class="muted">· bar ${esc(a.at)} · ${esc(a.entry)} / ${esc(a.stop)} / ${esc(a.target)}</span></span><span class="badge ${a.dir === "Short" ? "st-bad" : "st-good"}">${esc(a.dir)}</span></li>`).join("")
+    : `<li style="display:block" class="muted">No alerts yet today. Turn on auto-scan above.</li>`;
+}
+$("#alertBar").addEventListener("click", e => {
+  const d = e.target.closest("[data-adis]"), o = e.target.closest("[data-aopen]");
+  if (d) { if (d.dataset.adis === "all") Alerts.open = []; else Alerts.open.splice(+d.dataset.adis, 1); renderAlerts(); }
+  if (o) {
+    const a = Alerts.open[+o.dataset.aopen];
+    if (a?.setup) { $("#s-ticker").value = a.sym; Object.entries(a.setup).forEach(([k, v]) => $("#s-" + k).value = v); $("#s-swing").value = ""; renderSetup(); }
+    selectTab("setup");
+  }
+});
+$("#alertSound").addEventListener("change", e => {
+  try { localStorage.setItem(LS_KEY + "-sound", e.target.checked ? "1" : ""); } catch {}
+  if (e.target.checked) { Alerts.unlock(); Alerts.chime(); }
+});
+try { $("#alertSound").checked = localStorage.getItem(LS_KEY + "-sound") === "1"; } catch {}
 $("#watchBody").addEventListener("click", e => {
   const o = e.target.closest("[data-open]"); if (!o) return;
   const sym = o.dataset.open.toUpperCase(), s = liveSig[sym]; if (!s?.setup) return;
@@ -1059,7 +1160,7 @@ function selectTab(id) {
 }
 $("nav.tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) selectTab(b.dataset.tab); });
 
-function renderAll() { renderRegime(); renderRoutine(); renderSetup(); renderWatch(); renderJournal(); }
+function renderAll() { renderRegime(); renderRoutine(); renderSetup(); renderWatch(); renderJournal(); renderAlerts(); }
 
 /* ---------- Boot ---------- */
 buildTimeline();
