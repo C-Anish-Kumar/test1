@@ -1,0 +1,69 @@
+// VWAP Trend Desk: 200 EMA + Session VWAP + 1.5x Volume framework.
+// Apply to a 5-minute US-equity chart. Marks Reclaim/Bounce (long) and
+// Breakdown/Rejection (short) triggers that pass the trend, volume and
+// time-window rules, and draws the 1.5 x ATR stop and 2R target.
+//@version=5
+indicator("VWAP Trend Desk", overlay = true, max_lines_count = 200, max_labels_count = 200)
+
+htf        = input.timeframe("60", "Trend timeframe (60 = 1H, D = Daily)")
+emaLen     = input.int(200, "Trend EMA length")
+volLen     = input.int(20, "Volume SMA length")
+volMult    = input.float(1.5, "Volume multiple", step = 0.1)
+atrLen     = input.int(14, "ATR length")
+stopAtr    = input.float(1.5, "Stop = ATR x", step = 0.1)
+rrTarget   = input.float(2.0, "Target R multiple", step = 0.5)
+touchTol   = input.float(0.05, "VWAP touch tolerance ($)", step = 0.01)
+primeSess  = input.session("0945-1130", "Prime window (ET)")
+pmSess     = input.session("1400-1545", "Afternoon window (ET)")
+allowPm    = input.bool(true, "Allow afternoon window")
+showLevels = input.bool(true, "Draw stop / target")
+
+// Trend filter: HTF 200 EMA without lookahead.
+htfEma = request.security(syminfo.tickerid, htf, ta.ema(close, emaLen)[1], lookahead = barmerge.lookahead_on)
+// Session VWAP (hlc3), resets each regular session.
+vwapLine = ta.vwap(hlc3)
+volSma   = ta.sma(volume, volLen)
+atr      = ta.atr(atrLen)
+
+inPrime = not na(time(timeframe.period, primeSess, "America/New_York"))
+inPm    = not na(time(timeframe.period, pmSess, "America/New_York"))
+inWindow = inPrime or (allowPm and inPm)
+
+longRegime  = close > htfEma
+shortRegime = close < htfEma
+volOk = volume >= volMult * volSma
+
+reclaim   = low < vwapLine - touchTol and close > vwapLine
+bounce    = not reclaim and low <= vwapLine + touchTol and close > vwapLine and close > open
+breakdown = high > vwapLine + touchTol and close < vwapLine
+rejection = not breakdown and high >= vwapLine - touchTol and close < vwapLine and close < open
+
+longSig  = barstate.isconfirmed and longRegime and (reclaim or bounce) and volOk and inWindow
+shortSig = barstate.isconfirmed and shortRegime and (breakdown or rejection) and volOk and inWindow
+
+plot(htfEma, "200 EMA (HTF)", color.new(color.blue, 0), 2)
+plot(vwapLine, "Session VWAP", color.new(color.orange, 0), 2)
+bgcolor(inPrime ? color.new(color.green, 94) : na, title = "Prime window")
+bgcolor(not na(time(timeframe.period, "1545-1600", "America/New_York")) ? color.new(color.red, 90) : na, title = "Flatten 15:45")
+
+plotshape(longSig, "Long trigger", shape.triangleup, location.belowbar, color.green, text = "L", textcolor = color.green, size = size.small)
+plotshape(shortSig, "Short trigger", shape.triangledown, location.abovebar, color.red, text = "S", textcolor = color.red, size = size.small)
+
+if showLevels and (longSig or shortSig)
+    entry  = close
+    stop   = longSig ? low - stopAtr * atr : high + stopAtr * atr
+    risk   = math.abs(entry - stop)
+    target = longSig ? entry + rrTarget * risk : entry - rrTarget * risk
+    be     = longSig ? entry + risk : entry - risk
+    line.new(bar_index, stop, bar_index + 12, stop, color = color.red, style = line.style_solid)
+    line.new(bar_index, target, bar_index + 12, target, color = color.green, style = line.style_solid)
+    line.new(bar_index, be, bar_index + 12, be, color = color.blue, style = line.style_dotted)
+    trig = longSig ? (reclaim ? "Reclaim" : "Bounce") : (breakdown ? "Breakdown" : "Rejection")
+    label.new(bar_index, longSig ? low : high, trig + " " + str.tostring(volume / volSma, "#.0") + "x\nSL " + str.tostring(stop, format.mintick) + "  TP " + str.tostring(target, format.mintick),
+      style = longSig ? label.style_label_up : label.style_label_down, color = color.new(longSig ? color.green : color.red, 80), textcolor = chart.fg_color, size = size.small)
+
+// Volume panel helper: shows the trigger bar's multiple of the 20 SMA in the data window.
+plot(volume / volSma, "Volume / SMA", display = display.data_window)
+
+alertcondition(longSig, "VWAP long trigger", "{{ticker}} long VWAP trigger on 5m: above 200 EMA, volume >= 1.5x")
+alertcondition(shortSig, "VWAP short trigger", "{{ticker}} short VWAP trigger on 5m: below 200 EMA, volume >= 1.5x")
