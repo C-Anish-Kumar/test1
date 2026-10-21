@@ -144,6 +144,10 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
 .rule-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)) }
 .rule-grid ol, .rule-grid ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: .9rem }
 .math { font-family: var(--f-mono); background: var(--sunken); border-radius: 6px; padding: 12px; font-size: .85rem; overflow-x: auto; line-height: 1.7 }
+.live { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--sunken) }
+.live select { width: auto }
+.live-msg { font-size: .82rem; color: var(--muted) }
+.live-msg.err { color: var(--bad) }
 .toast { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 10px 14px; border-radius: 6px; font-size: .88rem; z-index: 20 }
 .confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: var(--bad-soft); color: var(--bad); border-radius: 6px; font-size: .85rem }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important } }
@@ -180,6 +184,7 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
         <div class="panel-head"><h2>Market regime</h2><span class="save" id="saveState"></span></div>
         <p class="muted" style="margin:0;font-size:.88rem">Where are SPY and QQQ against their 200 EMA (1H/Daily)? Favor stocks moving with the index.</p>
         <div class="fs" id="regime"></div>
+        <div class="row"><button class="btn" id="regimePull" data-live hidden>Pull SPY / QQQ from IBKR</button><span class="live-msg" id="regimeMsg"></span></div>
         <div id="regimeNote" class="verdict st-idle" style="padding:10px 12px;font-size:.88rem"></div>
         <label class="chk"><input type="checkbox" id="newsDay"><span><b>Tier-1 release today</b> (CPI, PPI, FOMC, Jobs). No entries within ±5 min of it.</span></label>
         <div class="field"><label for="newsTime">Release time (ET)</label><input id="newsTime" type="time" value="08:30"></div>
@@ -198,6 +203,15 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
     <section data-pane="setup" class="grid" hidden>
       <div class="panel c7">
         <div class="panel-head"><h2>Trigger candle (5m)</h2><div class="row"><button class="btn ghost" id="loadExample">Load example</button><button class="btn ghost" id="clearSetup">Clear</button></div></div>
+        <div class="live">
+          <div class="row"><span class="badge st-idle" id="liveBadge">Manual entry</span><span class="live-msg" id="liveMsg">Type the candle values, or pull them from Interactive Brokers.</span></div>
+          <div class="row" data-live hidden>
+            <label for="live-tf" class="muted" style="font-size:.8rem">Trend</label>
+            <select id="live-tf"><option value="1H">1H 200 EMA</option><option value="D">Daily 200 EMA</option></select>
+            <button class="btn primary" id="livePull">Pull last 5m bar</button>
+            <label class="chk"><input type="checkbox" id="liveAuto">Refresh every minute</label>
+          </div>
+        </div>
         <div class="fields">
           <div class="field"><label for="s-ticker">Ticker</label><input id="s-ticker" value="NVDA" autocomplete="off" style="text-transform:uppercase"></div>
           <div class="field"><label for="s-time">Candle close (ET)</label><input id="s-time" type="time" value="10:15"></div>
@@ -234,12 +248,13 @@ td input, td select { padding: 4px 6px; font-size: .82rem }
     <!-- WATCHLIST -->
     <section data-pane="watchlist" class="grid" hidden>
       <div class="panel c12">
-        <div class="panel-head"><h2>Pre-market screen</h2><div class="row"><span class="muted" style="font-size:.85rem">Pass: pre-mkt vol &gt; 500k, daily ATR ≥ $2.00, catalyst noted</span><button class="btn" id="addWatch">Add ticker</button></div></div>
+        <div class="panel-head"><h2>Pre-market screen</h2><div class="row"><span class="muted" style="font-size:.85rem">Pass: pre-mkt vol &gt; 500k, daily ATR ≥ $2.00, catalyst noted</span><button class="btn" id="addWatch">Add ticker</button><button class="btn primary" id="scanWatch" data-live hidden>Fill &amp; scan from IBKR</button><label class="chk" data-live hidden><input type="checkbox" id="scanAuto">Rescan every 5 min</label></div></div>
         <div class="tablebox"><table>
-          <thead><tr><th>Ticker</th><th class="num">Pre-mkt vol</th><th class="num">Daily ATR</th><th>Catalyst</th><th>vs 200 EMA</th><th class="num">PDH</th><th class="num">PDL</th><th class="num">PMH</th><th class="num">PML</th><th>Screen</th><th></th></tr></thead>
+          <thead><tr><th>Ticker</th><th>Signal (last 5m)</th><th class="num">Pre-mkt vol</th><th class="num">Daily ATR</th><th>Catalyst</th><th>vs 200 EMA</th><th class="num">PDH</th><th class="num">PDL</th><th class="num">PMH</th><th class="num">PML</th><th>Screen</th><th></th></tr></thead>
           <tbody id="watchBody"></tbody>
         </table></div>
         <div class="muted" style="font-size:.82rem" id="watchNote"></div>
+        <div class="live-msg" id="scanMsg"></div>
       </div>
     </section>
 
@@ -346,8 +361,8 @@ const toast = msg => { const t = $("#toast"); t.textContent = msg; t.hidden = fa
 
 /* ---------- Eastern-time clock ---------- */
 const etFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short" });
-function etNow() {
-  const p = Object.fromEntries(etFmt.formatToParts(new Date()).map(x => [x.type, x.value]));
+function etNow(ms) {
+  const p = Object.fromEntries(etFmt.formatToParts(ms == null ? new Date() : new Date(ms)).map(x => [x.type, x.value]));
   const h = +p.hour % 24, m = +p.minute, s = +p.second;
   return { date: `${p.year}-${p.month}-${p.day}`, wd: p.weekday, h, m, s, mins: h * 60 + m + s / 60, hms: `${String(h).padStart(2, "0")}:${p.minute}:${p.second}` };
 }
@@ -650,7 +665,7 @@ function screen(r) {
 function renderWatch() {
   const rows = watchRows(), bias = indexBias();
   if (!rows.length) {
-    $("#watchBody").innerHTML = `<tr><td colspan="11"><div class="empty">No tickers for ${today()} yet.<button class="btn" id="seedWatch">Start from NVDA, AAPL, MSFT, AMD, TSLA</button></div></td></tr>`;
+    $("#watchBody").innerHTML = `<tr><td colspan="12"><div class="empty">No tickers for ${today()} yet.<button class="btn" id="seedWatch">Start from NVDA, AAPL, MSFT, AMD, TSLA</button></div></td></tr>`;
     $("#watchNote").textContent = ""; return;
   }
   $("#watchBody").innerHTML = rows.map((r, i) => {
@@ -658,7 +673,7 @@ function renderWatch() {
     const align = bias && r.trend && ((bias === "long" && r.trend === "above") || (bias === "short" && r.trend === "below"));
     return `<tr data-i="${i}">${WCOLS.map(([k, kind, ph]) => {
       if (kind === "sel") return `<td><select data-k="${k}" id="w-${i}-${k}" aria-label="Trend"><option value=""></option><option value="above" ${r.trend === "above" ? "selected" : ""}>Above</option><option value="below" ${r.trend === "below" ? "selected" : ""}>Below</option></select></td>`;
-      return `<td${kind === "num" ? ' class="num"' : ""}><input data-k="${k}" id="w-${i}-${k}" value="${esc(r[k] ?? "")}" placeholder="${ph}" aria-label="${k}" style="${k === "t" ? "width:70px;text-transform:uppercase" : k === "cat" ? "width:160px" : "width:90px;text-align:right"}" ${kind === "num" ? 'inputmode="decimal"' : ""}></td>`;
+      return `<td${kind === "num" ? ' class="num"' : ""}><input data-k="${k}" id="w-${i}-${k}" value="${esc(r[k] ?? "")}" placeholder="${ph}" aria-label="${k}" style="${k === "t" ? "width:70px;text-transform:uppercase" : k === "cat" ? "width:160px" : "width:90px;text-align:right"}" ${kind === "num" ? 'inputmode="decimal"' : ""}></td>${k === "t" ? `<td>${sigCell(r.t)}</td>` : ""}`;
     }).join("")}<td><span class="badge ${pass ? (align ? "st-good" : "st-warn") : "st-bad"}" title="${esc(why.join(", "))}">${pass ? (align ? "A-list" : "Pass") : "Fail"}</span>${pass ? "" : `<div class="muted" style="font-size:.72rem">${esc(why.join(", "))}</div>`}</td>
     <td><button class="btn ghost" data-del="${i}" aria-label="Remove">✕</button></td></tr>`;
   }).join("");
@@ -825,6 +840,214 @@ function renderExp() {
 }
 $$("#e-w, #e-rr, #e-r").forEach(el => el.addEventListener("input", renderExp));
 
+/* ---------- Live data: Interactive Brokers connector ---------- */
+const IB = "Interactive Brokers IBKR";
+const OPEN = T(9, 30), CLOSE = T(16, 0), BAR = 5 * 60e3;
+const Live = {
+  mcp: null, conids: {},
+  async init() {
+    try { this.conids = JSON.parse(localStorage.getItem(LS_KEY + "-conids") || "{}"); } catch {}
+    try { const tf = localStorage.getItem(LS_KEY + "-tf"); if (tf) $("#live-tf").value = tf; } catch {}
+    const c = window.claude;
+    if (!c || typeof c.use !== "function") { this.setAvailable(false); return; }
+    this.mcp = await c.use("mcp").catch(() => null);
+    this.setAvailable(!!this.mcp);
+  },
+  setAvailable(on) {
+    $$("[data-live]").forEach(el => el.hidden = !on);
+    if (!on) setLiveMsg("#liveMsg", "Live data needs the claude.ai version of this page and the Interactive Brokers connector. Enter values by hand here.");
+  },
+  async call(tool, input, staleMs) {
+    const opts = staleMs ? { cache: { staleTime: staleMs, gcTime: Math.max(staleMs, 300000) } } : { cache: false };
+    try { return (await this.mcp.callTool(IB, tool, input, opts)).payload; }
+    catch (e) {
+      if (!e?.retryable) throw e;
+      await new Promise(r => setTimeout(r, Math.min(e.retryAfterMs || 0, 10000) + 500 + Math.random() * 1000));
+      return (await this.mcp.callTool(IB, tool, input, opts)).payload;
+    }
+  },
+  async conid(sym) {
+    if (this.conids[sym]) return this.conids[sym];
+    const res = await this.call("search_contracts", { query: sym }, 7 * 864e5);
+    const rows = (res?.results || []).filter(r => r.underlying_contract_id && r.symbol === sym && (r.sections || []).some(x => x.security_type === "STK"));
+    const pick = rows.find(r => r.country_code === "US") || rows[0];
+    if (!pick) throw { code: "no_contract", message: `No US stock found for ${sym}` };
+    this.conids[sym] = pick.underlying_contract_id;
+    try { localStorage.setItem(LS_KEY + "-conids", JSON.stringify(this.conids)); } catch {}
+    return pick.underlying_contract_id;
+  },
+  async bars(sym, step, period, rth, staleMs) {
+    const id = await this.conid(sym);
+    const r = await this.call("get_price_history", { contract_id: id, security_type: "STK", step, period, outside_rth: !rth }, staleMs);
+    const t = r?.time || [];
+    return t.map((ts, i) => ({ t: Date.parse(ts), o: r.open[i], h: r.high[i], l: r.low[i], c: r.close[i], v: r.volume[i] }))
+      .filter(b => Number.isFinite(b.t) && [b.o, b.h, b.l, b.c].every(Number.isFinite));
+  },
+  intraday: sym => Live.bars(sym, "FIVE_MINS", "TWO_DAYS", false, 50e3),
+  hourly: sym => Live.bars(sym, "ONE_HOUR", "THREE_MONTHS", true, 15 * 60e3),
+  daily: sym => Live.bars(sym, "ONE_DAY", "ONE_YEAR", true, 60 * 60e3),
+};
+function liveErr(e) {
+  const code = e?.code;
+  switch (code) {
+    case "needs_reauth": return "Reconnect Interactive Brokers in claude.ai Settings → Connectors.";
+    case "server_not_connected": case "server_not_found": return "Add the Interactive Brokers connector in claude.ai Settings → Connectors.";
+    case "selection_required": return "Choose which Interactive Brokers connector this page uses (claude.ai asks when the page opens).";
+    case "not_in_manifest": case "approval_required": case "consent_required": return "This page isn't allowed to use Interactive Brokers yet. Allow it from the page's Permissions menu, then pull again.";
+    case "blocked_by_policy": return "Your organization blocks the Interactive Brokers connector here.";
+    case "server_unavailable": case "rate_limited": return "Interactive Brokers didn't answer. Try again in a minute.";
+    case "tool_error": return "Interactive Brokers refused the request: " + (e.message || "no detail") + ". Check your market data subscription.";
+    case "no_contract": case "no_data": return e.message;
+    case "not_granted": case "capability_disabled": case "capability_removed": Live.setAvailable(false); return "Live data isn't available in this view.";
+    default: return "Interactive Brokers request failed" + (code ? ` (${code})` : "") + ".";
+  }
+}
+function setLiveMsg(sel, text, err) { const el = $(sel); el.textContent = text; el.classList.toggle("err", !!err); }
+
+const ema = (vals, n) => { const k = 2 / (n + 1); let e = NaN; for (const v of vals) e = Number.isFinite(e) ? v * k + e * (1 - k) : v; return e; };
+function wilderAtr(bars, n) {
+  let atr = NaN, i = 0, sum = 0;
+  for (let j = 1; j < bars.length; j++) {
+    const b = bars[j], pc = bars[j - 1].c, tr = Math.max(b.h - b.l, Math.abs(b.h - pc), Math.abs(b.l - pc));
+    if (i < n) { sum += tr; i++; if (i === n) atr = sum / n; } else atr = (atr * (n - 1) + tr) / n;
+  }
+  return atr;
+}
+// Everything the playbook needs, from IBKR bars, as of the last completed 5m bar.
+function computeLive(intra, htf, daily, nowMs) {
+  const tag = b => { const e = etNow(b.t); return { ...b, date: e.date, mins: e.h * 60 + e.m }; };
+  const all = intra.map(tag);
+  const rth = all.filter(b => b.mins >= OPEN && b.mins < CLOSE && b.t + BAR <= nowMs);
+  const today = etNow(nowMs).date;
+  const pm = all.filter(b => b.date === today && b.mins >= T(4, 0) && b.mins < OPEN);
+  const out = {};
+  if (pm.length) Object.assign(out, { pmv: pm.reduce((a, b) => a + b.v, 0), pmh: Math.max(...pm.map(b => b.h)), pml: Math.min(...pm.map(b => b.l)) });
+  if (daily?.length) {
+    const d = daily.map(tag), prior = d.filter(b => b.date < today);
+    const pd = prior[prior.length - 1];
+    if (pd) Object.assign(out, { pdh: pd.h, pdl: pd.l });
+    out.datr = wilderAtr(prior, 14);
+  }
+  if (htf?.length) out.ema = ema(htf.map(b => b.c), 200);
+  const last = rth[rth.length - 1];
+  if (last) {
+    const sess = rth.filter(b => b.date === last.date);
+    let pv = 0, vv = 0; for (const b of sess) { pv += (b.h + b.l + b.c) / 3 * b.v; vv += b.v; }
+    const last20 = rth.slice(-20);
+    Object.assign(out, { bar: last, vwap: vv ? pv / vv : NaN, vsma: last20.length === 20 ? last20.reduce((a, b) => a + b.v, 0) / 20 : NaN, atr: wilderAtr(rth, 14) });
+  }
+  return out;
+}
+const htfFor = (sym, tf) => tf === "D" ? Live.daily(sym) : Live.hourly(sym);
+const p2 = n => Number.isFinite(n) ? n.toFixed(2) : "";
+
+async function pullSetup(quiet) {
+  if (!Live.mcp) return;
+  const sym = $("#s-ticker").value.trim().toUpperCase();
+  if (!sym) { setLiveMsg("#liveMsg", "Enter a ticker first.", true); return; }
+  const tf = $("#live-tf").value;
+  $("#livePull").disabled = true;
+  if (!quiet) setLiveMsg("#liveMsg", `Pulling ${sym} from Interactive Brokers…`);
+  try {
+    const [intra, htf] = await Promise.all([Live.intraday(sym), htfFor(sym, tf)]);
+    const x = computeLive(intra, htf, null, Date.now());
+    if (!x.bar) throw { code: "no_data", message: `No completed regular-session 5m bars for ${sym} yet.` };
+    const b = x.bar;
+    Object.entries({ time: fmtMin(b.mins + 5), ema: p2(x.ema), vwap: p2(x.vwap), o: p2(b.o), h: p2(b.h), l: p2(b.l), c: p2(b.c), vol: String(Math.round(b.v)), vsma: Number.isFinite(x.vsma) ? String(Math.round(x.vsma)) : "", atr: Number.isFinite(x.atr) ? x.atr.toFixed(3) : "", swing: "" })
+      .forEach(([k, v]) => $("#s-" + k).value = v);
+    renderSetup();
+    const b2 = $("#liveBadge"); b2.className = "badge st-good"; b2.textContent = "Live · IBKR";
+    setLiveMsg("#liveMsg", `${sym} bar ${b.date} ${fmtMin(b.mins)}–${fmtMin(b.mins + 5)} ET · ${tf === "D" ? "Daily" : "1H"} EMA from ${htf.length} bars · pulled ${etNow().hms} ET`);
+  } catch (e) {
+    const b2 = $("#liveBadge"); b2.className = "badge st-bad"; b2.textContent = "Live failed";
+    setLiveMsg("#liveMsg", liveErr(e), true);
+  } finally { $("#livePull").disabled = false; }
+}
+let autoTimer = null;
+$("#livePull").addEventListener("click", () => pullSetup());
+$("#live-tf").addEventListener("change", e => { try { localStorage.setItem(LS_KEY + "-tf", e.target.value); } catch {} });
+$("#liveAuto").addEventListener("change", e => {
+  clearInterval(autoTimer); autoTimer = null;
+  if (e.target.checked) { pullSetup(); autoTimer = setInterval(() => { if (!document.hidden) pullSetup(true); }, 60e3); }
+});
+
+$("#regimePull").addEventListener("click", async () => {
+  const tf = $("#live-tf").value, btn = $("#regimePull"); btn.disabled = true;
+  setLiveMsg("#regimeMsg", "Pulling SPY and QQQ…");
+  try {
+    const reg = { ...(dayDoc().regime || {}) }, notes = [];
+    for (const t of IDX) {
+      const bars = await htfFor(t, tf), e = ema(bars.map(b => b.c), 200), last = bars[bars.length - 1]?.c;
+      if (!Number.isFinite(e) || !Number.isFinite(last)) throw { code: "no_data", message: `No ${t} history returned.` };
+      reg[t] = last > e ? "above" : "below";
+      notes.push(`${t} ${last.toFixed(2)} vs ${e.toFixed(2)}`);
+    }
+    putDay({ regime: reg }); renderRegime(); renderSetup(); renderWatch();
+    setLiveMsg("#regimeMsg", `${tf === "D" ? "Daily" : "1H"} 200 EMA · ${notes.join(" · ")}`);
+  } catch (e) { setLiveMsg("#regimeMsg", liveErr(e), true); }
+  finally { btn.disabled = false; }
+});
+
+const liveSig = {};
+function sigCell(t) {
+  const s = liveSig[String(t || "").toUpperCase()];
+  if (!s) return '<span class="muted">—</span>';
+  if (s.err) return `<span class="badge st-bad" title="${esc(s.err)}">error</span>`;
+  const cls = s.ok ? (s.warns ? "st-warn" : "st-good") : "st-idle";
+  const txt = s.ok ? `${s.dir} ${s.trigger}` : "No setup";
+  return `<button class="btn ghost" data-open="${esc(t)}" title="Open in Setup check" style="padding:0"><span class="badge ${cls}">${esc(txt)}</span></button><div class="muted mono" style="font-size:.7rem">${esc(s.at)}${s.ok ? "" : " · " + esc(s.why)}</div>`;
+}
+let scanning = false;
+async function scanWatch(quiet) {
+  if (!Live.mcp || scanning) return;
+  const rows = watchRows().map(r => ({ ...r })).filter(r => r.t);
+  if (!rows.length) { setLiveMsg("#scanMsg", "Add tickers first.", true); return; }
+  scanning = true; $("#scanWatch").disabled = true;
+  const tf = $("#live-tf").value, base = readSetup();
+  let done = 0, failed = 0, firstErr = null;
+  const work = rows.map(r => async () => {
+    const sym = r.t.toUpperCase();
+    try {
+      const [intra, daily, htf] = await Promise.all([Live.intraday(sym), Live.daily(sym), tf === "D" ? Promise.resolve(null) : Live.hourly(sym)]);
+      const x = computeLive(intra, htf || daily, daily, Date.now());
+      if (Number.isFinite(x.pmv)) r.pmv = String(Math.round(x.pmv));
+      if (Number.isFinite(x.datr)) r.atr = x.datr.toFixed(2);
+      for (const k of ["pdh", "pdl", "pmh", "pml"]) if (Number.isFinite(x[k])) r[k] = x[k].toFixed(2);
+      const lastPx = x.bar?.c ?? intra[intra.length - 1]?.c;
+      if (Number.isFinite(x.ema) && Number.isFinite(lastPx)) r.trend = lastPx > x.ema ? "above" : "below";
+      if (x.bar) {
+        const b = x.bar, ev = evaluate({ ...base, ticker: sym, time: fmtMin(b.mins + 5), ema: x.ema, vwap: x.vwap, o: b.o, h: b.h, l: b.l, c: b.c, vol: b.v, vsma: x.vsma, atr: x.atr, swing: "" });
+        const bad = (ev.rules || []).filter(q => q.ok === "bad").map(q => q.title);
+        liveSig[sym] = { ok: !ev.incomplete && ev.fails === 0, warns: ev.warns, dir: ev.dir, trigger: ev.trigger, at: `${fmtMin(b.mins + 5)} ET`, why: ev.incomplete ? "not enough bars" : bad[0] || "", setup: { time: fmtMin(b.mins + 5), ema: p2(x.ema), vwap: p2(x.vwap), o: p2(b.o), h: p2(b.h), l: p2(b.l), c: p2(b.c), vol: String(Math.round(b.v)), vsma: Number.isFinite(x.vsma) ? String(Math.round(x.vsma)) : "", atr: Number.isFinite(x.atr) ? x.atr.toFixed(3) : "" } };
+      } else liveSig[sym] = { ok: false, at: "pre-open", why: "no session bars yet" };
+    } catch (e) { failed++; firstErr = firstErr || e; liveSig[sym] = { err: liveErr(e) }; }
+    done++; if (!quiet) setLiveMsg("#scanMsg", `Scanning ${done}/${rows.length}…`);
+  });
+  // Two at a time keeps the connector responsive.
+  const queue = work.slice();
+  await Promise.all([0, 1].map(async () => { while (queue.length) await queue.shift()(); }));
+  const cur = watchRows().map(r => ({ ...r }));
+  for (const r of cur) { const u = rows.find(x => x.t === r.t); if (u) Object.assign(r, { pmv: u.pmv, atr: u.atr, trend: u.trend, pdh: u.pdh, pdl: u.pdl, pmh: u.pmh, pml: u.pml }); }
+  saveWatch(cur); renderWatch();
+  const hits = rows.filter(r => liveSig[r.t.toUpperCase()]?.ok).length;
+  setLiveMsg("#scanMsg", failed ? `${failed} of ${rows.length} failed: ${liveErr(firstErr)}` : `Scanned ${rows.length} at ${etNow().hms} ET · ${hits} valid setup${hits === 1 ? "" : "s"} on the last 5m bar. Catalyst stays manual.`, failed > 0);
+  scanning = false; $("#scanWatch").disabled = false;
+}
+let scanTimer = null;
+$("#scanWatch").addEventListener("click", () => scanWatch());
+$("#scanAuto").addEventListener("change", e => {
+  clearInterval(scanTimer); scanTimer = null;
+  if (e.target.checked) { scanWatch(); scanTimer = setInterval(() => { if (!document.hidden) scanWatch(true); }, 5 * 60e3); }
+});
+$("#watchBody").addEventListener("click", e => {
+  const o = e.target.closest("[data-open]"); if (!o) return;
+  const sym = o.dataset.open.toUpperCase(), s = liveSig[sym]; if (!s?.setup) return;
+  $("#s-ticker").value = sym; Object.entries(s.setup).forEach(([k, v]) => $("#s-" + k).value = v); $("#s-swing").value = "";
+  renderSetup(); selectTab("setup");
+  const b2 = $("#liveBadge"); b2.className = "badge st-good"; b2.textContent = "Live · IBKR";
+  setLiveMsg("#liveMsg", `${sym} from the watchlist scan, bar closing ${s.at}.`);
+});
+
 /* ---------- Tabs ---------- */
 const TABS = ["today", "setup", "watchlist", "journal", "rules"];
 function selectTab(id) {
@@ -842,6 +1065,7 @@ function renderAll() { renderRegime(); renderRoutine(); renderSetup(); renderWat
 buildTimeline();
 try { const s = JSON.parse(localStorage.getItem(LS_KEY + "-setup") || "null"); if (s) for (const k of SF) if (s[k] != null) $("#s-" + k).value = s[k]; } catch {}
 Store.init();
+Live.init();
 renderAll(); renderExp(); tick();
 setInterval(tick, 1000);
 let startTab = (location.hash || "").slice(1);
