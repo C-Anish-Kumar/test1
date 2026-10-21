@@ -880,6 +880,21 @@ const Live = {
       return (await this.mcp.callTool(IB, tool, input, opts)).payload;
     }
   },
+  // Settle the connector permission and make one call alone before any parallel calls:
+  // several first calls at once can each hit an unanswered consent prompt and fail.
+  ok: false,
+  async ready() {
+    if (this.ok) return;
+    const perms = await window.claude.use("permissions").catch(() => null);
+    if (perms) {
+      const name = "mcp:" + IB;
+      let st = await perms.state(name).catch(() => "unavailable");
+      if (st === "prompt") st = (await perms.request([name]).catch(() => ({})))[name] || st;
+      if (st === "denied") throw { code: "denied" };
+    }
+    await this.call("search_contracts", { query: "SPY" }, 7 * 864e5);
+    this.ok = true;
+  },
   async conid(sym) {
     if (this.conids[sym]) return this.conids[sym];
     const res = await this.call("search_contracts", { query: sym }, 7 * 864e5);
@@ -908,12 +923,13 @@ function liveErr(e) {
     case "server_not_connected": case "server_not_found": return "Add the Interactive Brokers connector in claude.ai Settings → Connectors.";
     case "selection_required": return "Choose which Interactive Brokers connector this page uses (claude.ai asks when the page opens).";
     case "not_in_manifest": case "approval_required": case "consent_required": return "This page isn't allowed to use Interactive Brokers yet. Allow it from the page's Permissions menu, then pull again.";
+    case "denied": return "Interactive Brokers is turned off for this page. Turn it on in the page's Permissions menu, then pull again.";
     case "blocked_by_policy": return "Your organization blocks the Interactive Brokers connector here.";
     case "server_unavailable": case "rate_limited": return "Interactive Brokers didn't answer. Try again in a minute.";
     case "tool_error": return "Interactive Brokers refused the request: " + (e.message || "no detail") + ". Check your market data subscription.";
     case "no_contract": case "no_data": return e.message;
     case "not_granted": case "capability_disabled": case "capability_removed": Live.setAvailable(false); return "Live data isn't available in this view.";
-    default: return "Interactive Brokers request failed" + (code ? ` (${code})` : "") + ".";
+    default: return "Interactive Brokers request failed" + (code ? ` (${code}${e.message ? ": " + String(e.message).slice(0, 160) : ""})` : "") + ". Try again; if it repeats, reconnect the connector in claude.ai Settings → Connectors.";
   }
 }
 function setLiveMsg(sel, text, err) { const el = $(sel); el.textContent = text; el.classList.toggle("err", !!err); }
@@ -963,6 +979,7 @@ async function pullSetup(quiet) {
   $("#livePull").disabled = true;
   if (!quiet) setLiveMsg("#liveMsg", `Pulling ${sym} from Interactive Brokers…`);
   try {
+    await Live.ready();
     const [intra, htf] = await Promise.all([Live.intraday(sym), htfFor(sym, tf)]);
     const x = computeLive(intra, htf, null, Date.now());
     if (!x.bar) throw { code: "no_data", message: `No completed regular-session 5m bars for ${sym} yet.` };
@@ -990,6 +1007,7 @@ $("#regimePull").addEventListener("click", async () => {
   const tf = $("#live-tf").value, btn = $("#regimePull"); btn.disabled = true;
   setLiveMsg("#regimeMsg", "Pulling SPY and QQQ…");
   try {
+    await Live.ready();
     const reg = { ...(dayDoc().regime || {}) }, notes = [];
     for (const t of IDX) {
       const bars = await htfFor(t, tf), e = ema(bars.map(b => b.c), 200), last = bars[bars.length - 1]?.c;
@@ -1018,6 +1036,8 @@ async function scanWatch(quiet) {
   const rows = watchRows().map(r => ({ ...r })).filter(r => r.t);
   if (!rows.length) { setLiveMsg("#scanMsg", "Add tickers first.", true); return; }
   scanning = true; $("#scanWatch").disabled = true;
+  try { await Live.ready(); }
+  catch (e) { setLiveMsg("#scanMsg", liveErr(e), true); scanning = false; $("#scanWatch").disabled = false; return; }
   const tf = $("#live-tf").value, base = readSetup();
   let done = 0, failed = 0, firstErr = null;
   const work = rows.map(r => async () => {
@@ -1038,9 +1058,8 @@ async function scanWatch(quiet) {
     } catch (e) { failed++; firstErr = firstErr || e; liveSig[sym] = { err: liveErr(e) }; }
     done++; if (!quiet) setLiveMsg("#scanMsg", `Scanning ${done}/${rows.length}…`);
   });
-  // Two at a time keeps the connector responsive.
-  const queue = work.slice();
-  await Promise.all([0, 1].map(async () => { while (queue.length) await queue.shift()(); }));
+  // One ticker at a time keeps the connector responsive.
+  for (const w of work) await w();
   const cur = watchRows().map(r => ({ ...r }));
   for (const r of cur) { const u = rows.find(x => x.t === r.t); if (u) Object.assign(r, { pmv: u.pmv, atr: u.atr, trend: u.trend, pdh: u.pdh, pdl: u.pdl, pmh: u.pmh, pml: u.pml }); }
   saveWatch(cur); renderWatch();
