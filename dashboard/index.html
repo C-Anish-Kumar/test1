@@ -1,0 +1,851 @@
+<title>VWAP Trend Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a trading-desk console — sticky session bar on top, tabbed work areas below, data set in mono. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --sunken: #f5f7f9; --ink: #13202c; --muted: #586878; --line: #d6dee5;
+  --vwap: #b8650a; --vwap-soft: #fbeedd; --ema: #2b59c9; --ema-soft: #e5ecfb;
+  --good: #1d7f46; --good-soft: #e1f3e8; --bad: #bb3328; --bad-soft: #fbe6e3; --warn: #94650f; --warn-soft: #f8efd9;
+  --f-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 8px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d131a; --surface: #141c25; --sunken: #10171f; --ink: #e3eaf1; --muted: #8d9cab; --line: #24313f;
+  --vwap: #f0a33c; --vwap-soft: #2e2213; --ema: #7aa0ff; --ema-soft: #18233d;
+  --good: #46c27b; --good-soft: #13281c; --bad: #f0675b; --bad-soft: #301816; --warn: #e2ad48; --warn-soft: #2d2412; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d131a; --surface: #141c25; --sunken: #10171f; --ink: #e3eaf1; --muted: #8d9cab; --line: #24313f;
+  --vwap: #f0a33c; --vwap-soft: #2e2213; --ema: #7aa0ff; --ema-soft: #18233d;
+  --good: #46c27b; --good-soft: #13281c; --bad: #f0675b; --bad-soft: #301816; --warn: #e2ad48; --warn-soft: #2d2412; color-scheme: dark }
+
+*, *::before, *::after { box-sizing: border-box }
+[hidden] { display: none !important }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--f-body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface) }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--f-display); font-stretch: 85%; margin: 0; text-wrap: balance; letter-spacing: .005em }
+h2 { font-size: 1.2rem; font-weight: 700 }
+h3 { font-size: .95rem; font-weight: 700 }
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600 }
+.mono, input, .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+.muted { color: var(--muted) }
+small { font-size: .82rem }
+a { color: var(--ema) }
+
+/* Session bar */
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line) }
+.bar .wrap:not(.timeline) { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; padding-block: 10px }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto }
+.brand h1 { font-size: 1.35rem; font-weight: 800 }
+.brand .tag { font-family: var(--f-mono); font-size: .72rem; color: var(--muted) }
+.clock { font-family: var(--f-mono); font-size: 1.25rem; font-weight: 600 }
+.phase { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 999px; font-weight: 600; font-size: .85rem; border: 1px solid transparent }
+.phase::before { content: ""; width: 8px; height: 8px; border-radius: 50% ; background: currentColor }
+.st-good { background: var(--good-soft); color: var(--good) }
+.st-warn { background: var(--warn-soft); color: var(--warn) }
+.st-bad { background: var(--bad-soft); color: var(--bad) }
+.st-idle { background: var(--sunken); color: var(--muted); border-color: var(--line) }
+.next { font-size: .85rem; color: var(--muted) }
+.save { font-size: .75rem; color: var(--muted) }
+
+/* Timeline */
+.timeline { padding-block: 0 10px }
+.tl { position: relative; display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); font-size: .68rem; font-weight: 600 }
+.tl > div { display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; border-right: 1px solid var(--surface); padding: 0 4px }
+@media (max-width: 600px) { .tl-ticks .minor { display: none } }
+.tl .now { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); border: 0; padding: 0 }
+.tl-ticks { position: relative; height: 14px; font-family: var(--f-mono); font-size: .66rem; color: var(--muted); margin-top: 2px }
+
+/* Tabs */
+nav.tabs { display: flex; gap: 4px; overflow-x: auto; padding-block: 14px 0; border-bottom: 1px solid var(--line); margin-bottom: 18px }
+nav.tabs button { font: 600 .9rem var(--f-body); background: none; border: 0; padding: 8px 14px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap }
+nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--vwap) }
+nav.tabs button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--ema); outline-offset: 2px }
+
+main { padding-block: 0 48px }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr) }
+.c4 { grid-column: span 4 } .c5 { grid-column: span 5 } .c6 { grid-column: span 6 } .c7 { grid-column: span 7 } .c8 { grid-column: span 8 } .c12 { grid-column: span 12 }
+@media (max-width: 900px) { .c4, .c5, .c6, .c7, .c8 { grid-column: span 12 } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; min-width: 0; display: flex; flex-direction: column; gap: 12px }
+.panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px }
+
+/* Forms */
+.fields { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)) }
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0 }
+.field label { font-size: .75rem; color: var(--muted); font-weight: 600 }
+input, select, textarea { font-size: .9rem; color: var(--ink); background: var(--sunken); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; width: 100%; min-width: 0 }
+textarea { font-family: var(--f-body); resize: vertical }
+select { font-family: var(--f-body) }
+.fs { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px }
+.fs legend { padding: 0; margin-bottom: 6px }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden }
+.seg button { font: 600 .82rem var(--f-body); border: 0; background: var(--sunken); color: var(--muted); padding: 6px 12px; cursor: pointer }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface) }
+.btn { font: 600 .85rem var(--f-body); border-radius: 6px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--ink) }
+.btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink) }
+.btn.ghost { background: none; border-color: transparent; color: var(--muted); padding-inline: 6px }
+.btn:disabled { opacity: .45; cursor: not-allowed }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.chk { display: flex; gap: 8px; align-items: flex-start; font-size: .88rem; cursor: pointer }
+.chk input { width: auto; margin-top: 3px; accent-color: var(--good) }
+
+/* Checklist */
+.checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px }
+.checklist li label { display: grid; grid-template-columns: 20px 1fr; gap: 8px; padding: 7px 8px; border-radius: 6px; cursor: pointer }
+.checklist li label:hover { background: var(--sunken) }
+.checklist input { width: 16px; height: 16px; margin: 3px 0 0; accent-color: var(--good) }
+.checklist b { font-weight: 600 }
+.checklist .d { display: block; color: var(--muted); font-size: .82rem }
+.checklist input:checked + span b { text-decoration: line-through; color: var(--muted) }
+.progress { height: 4px; border-radius: 4px; background: var(--sunken); overflow: hidden }
+.progress i { display: block; height: 100%; background: var(--good); transition: width .2s }
+.active-window { outline: 2px solid var(--vwap); outline-offset: -1px }
+.badge { font: 600 .7rem var(--f-body); text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 999px }
+
+/* Validator */
+.verdict { border-radius: var(--r); padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline }
+.verdict strong { font-family: var(--f-display); font-stretch: 80%; font-size: 1.6rem; font-weight: 800; letter-spacing: .01em }
+.rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px }
+.rules li { display: grid; grid-template-columns: 26px 1fr; gap: 8px; align-items: start; font-size: .88rem }
+.rules .ic { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: .75rem; font-family: var(--f-mono) }
+.rules .why { color: var(--muted); font-size: .8rem; display: block }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 6px; overflow: hidden }
+.kv > div { background: var(--surface); padding: 8px 10px; display: flex; flex-direction: column; gap: 2px }
+.kv .v { font-family: var(--f-mono); font-size: 1.05rem; font-weight: 600 }
+.ladder { display: flex; flex-direction: column; font-family: var(--f-mono); font-size: .85rem; border: 1px solid var(--line); border-radius: 6px; overflow: hidden }
+.ladder div { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; padding: 6px 10px; border-left: 4px solid transparent }
+.ladder div + div { border-top: 1px solid var(--line) }
+
+/* Candle sketch */
+svg text { font-family: var(--f-mono) }
+
+/* Tables */
+.tablebox { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px }
+table { border-collapse: collapse; width: 100%; font-size: .84rem }
+th, td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap }
+th { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); background: var(--sunken); font-weight: 600 }
+td.num, th.num { text-align: right; font-family: var(--f-mono) }
+tr:last-child td { border-bottom: 0 }
+td input, td select { padding: 4px 6px; font-size: .82rem }
+.pos { color: var(--good) } .neg { color: var(--bad) }
+.empty { padding: 22px; text-align: center; color: var(--muted); display: flex; flex-direction: column; gap: 10px; align-items: center }
+
+/* Stats */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px }
+.tile { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; background: var(--surface) }
+.tile .v { font-family: var(--f-mono); font-size: 1.35rem; font-weight: 600 }
+.tile .s { font-size: .76rem; color: var(--muted) }
+
+/* Playbook */
+.rule-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)) }
+.rule-grid ol, .rule-grid ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: .9rem }
+.math { font-family: var(--f-mono); background: var(--sunken); border-radius: 6px; padding: 12px; font-size: .85rem; overflow-x: auto; line-height: 1.7 }
+.toast { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--surface); padding: 10px 14px; border-radius: 6px; font-size: .88rem; z-index: 20 }
+.confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; background: var(--bad-soft); color: var(--bad); border-radius: 6px; font-size: .85rem }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+
+<header class="bar">
+  <div class="wrap">
+    <div class="brand"><h1>VWAP Trend Desk</h1><span class="tag">200 EMA · VWAP · 1.5× VOL</span></div>
+    <div class="row" style="gap:12px">
+      <span class="clock" id="clock" aria-live="off">--:--:--</span><span class="label">ET</span>
+      <span class="phase st-idle" id="phase">Loading</span>
+      <span class="next" id="next"></span>
+    </div>
+  </div>
+  <div class="wrap timeline">
+    <div class="tl" id="tl" aria-hidden="true"></div>
+    <div class="tl-ticks" id="tlTicks"></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="today" id="tab-today">Today</button>
+    <button role="tab" data-tab="setup" id="tab-setup">Setup check</button>
+    <button role="tab" data-tab="watchlist" id="tab-watchlist">Watchlist</button>
+    <button role="tab" data-tab="journal" id="tab-journal">Journal</button>
+    <button role="tab" data-tab="rules" id="tab-rules">Playbook</button>
+  </nav>
+
+  <main>
+    <!-- TODAY -->
+    <section data-pane="today" class="grid">
+      <div class="panel c4">
+        <div class="panel-head"><h2>Market regime</h2><span class="save" id="saveState"></span></div>
+        <p class="muted" style="margin:0;font-size:.88rem">Where are SPY and QQQ against their 200 EMA (1H/Daily)? Favor stocks moving with the index.</p>
+        <div class="fs" id="regime"></div>
+        <div id="regimeNote" class="verdict st-idle" style="padding:10px 12px;font-size:.88rem"></div>
+        <label class="chk"><input type="checkbox" id="newsDay"><span><b>Tier-1 release today</b> (CPI, PPI, FOMC, Jobs). No entries within ±5 min of it.</span></label>
+        <div class="field"><label for="newsTime">Release time (ET)</label><input id="newsTime" type="time" value="08:30"></div>
+        <div id="newsNote" class="muted" style="font-size:.85rem"></div>
+      </div>
+      <div class="c8" style="display:flex;flex-direction:column;gap:16px;min-width:0">
+        <div class="panel">
+          <div class="panel-head"><h2>Daily routine</h2><div class="row"><span class="muted mono" id="routineDate"></span><span class="mono" id="routinePct"></span><button class="btn ghost" id="resetRoutine">Clear today</button></div></div>
+          <div class="progress"><i id="routineBar" style="width:0"></i></div>
+          <div class="grid" id="routine" style="gap:12px"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETUP -->
+    <section data-pane="setup" class="grid" hidden>
+      <div class="panel c7">
+        <div class="panel-head"><h2>Trigger candle (5m)</h2><div class="row"><button class="btn ghost" id="loadExample">Load example</button><button class="btn ghost" id="clearSetup">Clear</button></div></div>
+        <div class="fields">
+          <div class="field"><label for="s-ticker">Ticker</label><input id="s-ticker" value="NVDA" autocomplete="off" style="text-transform:uppercase"></div>
+          <div class="field"><label for="s-time">Candle close (ET)</label><input id="s-time" type="time" value="10:15"></div>
+          <div class="field"><label for="s-ema">200 EMA (1H/D)</label><input id="s-ema" inputmode="decimal" value="171.40"></div>
+          <div class="field"><label for="s-vwap">Session VWAP</label><input id="s-vwap" inputmode="decimal" value="182.60"></div>
+          <div class="field"><label for="s-o">Open</label><input id="s-o" inputmode="decimal" value="182.68"></div>
+          <div class="field"><label for="s-h">High</label><input id="s-h" inputmode="decimal" value="183.02"></div>
+          <div class="field"><label for="s-l">Low</label><input id="s-l" inputmode="decimal" value="182.55"></div>
+          <div class="field"><label for="s-c">Close</label><input id="s-c" inputmode="decimal" value="182.88"></div>
+          <div class="field"><label for="s-vol">Volume</label><input id="s-vol" inputmode="numeric" value="1240000"></div>
+          <div class="field"><label for="s-vsma">Vol SMA(20)</label><input id="s-vsma" inputmode="numeric" value="710000"></div>
+          <div class="field"><label for="s-atr">ATR(14) 5m</label><input id="s-atr" inputmode="decimal" value="0.62"></div>
+          <div class="field"><label for="s-tol">VWAP touch tol. $</label><input id="s-tol" inputmode="decimal" value="0.05"></div>
+          <div class="field"><label for="s-swing">Swing extreme (opt.)</label><input id="s-swing" inputmode="decimal" placeholder="candle low/high"></div>
+          <div class="field"><label for="s-risk">Risk per trade $</label><input id="s-risk" inputmode="decimal" value="250"></div>
+          <div class="field"><label for="s-entry">Entry on</label><select id="s-entry"><option value="close">Trigger close</option><option value="break">Break of high/low</option></select></div>
+        </div>
+        <p class="muted" style="margin:0;font-size:.8rem">Values shown on first open are an example NVDA bounce. Index alignment and the news blackout come from the Today tab.</p>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+          <svg id="candle" viewBox="0 0 220 170" width="220" height="170" role="img" aria-label="Trigger candle against VWAP" style="max-width:100%;flex:none"></svg>
+          <ul class="rules" id="ruleList" style="flex:1;min-width:220px"></ul>
+        </div>
+      </div>
+      <div class="panel c5">
+        <div id="verdict" class="verdict st-idle"><strong>—</strong></div>
+        <h3>Order plan</h3>
+        <div class="kv" id="plan"></div>
+        <div class="ladder" id="ladder"></div>
+        <div class="muted" style="font-size:.82rem">Stop = 1.5 × ATR beyond the VWAP swing extreme. Target = 2R. Move stop to entry at +1R. Flatten by 15:45 ET.</div>
+        <div class="row"><button class="btn primary" id="logSetup">Log to journal</button><span class="muted" style="font-size:.8rem" id="logHint"></span></div>
+      </div>
+    </section>
+
+    <!-- WATCHLIST -->
+    <section data-pane="watchlist" class="grid" hidden>
+      <div class="panel c12">
+        <div class="panel-head"><h2>Pre-market screen</h2><div class="row"><span class="muted" style="font-size:.85rem">Pass: pre-mkt vol &gt; 500k, daily ATR ≥ $2.00, catalyst noted</span><button class="btn" id="addWatch">Add ticker</button></div></div>
+        <div class="tablebox"><table>
+          <thead><tr><th>Ticker</th><th class="num">Pre-mkt vol</th><th class="num">Daily ATR</th><th>Catalyst</th><th>vs 200 EMA</th><th class="num">PDH</th><th class="num">PDL</th><th class="num">PMH</th><th class="num">PML</th><th>Screen</th><th></th></tr></thead>
+          <tbody id="watchBody"></tbody>
+        </table></div>
+        <div class="muted" style="font-size:.82rem" id="watchNote"></div>
+      </div>
+    </section>
+
+    <!-- JOURNAL -->
+    <section data-pane="journal" class="grid" hidden>
+      <div class="panel c12">
+        <div class="panel-head"><h2>Performance vs. expected profile</h2><span class="muted" style="font-size:.85rem" id="statScope"></span></div>
+        <div class="tiles" id="tiles"></div>
+        <svg id="curve" viewBox="0 0 900 200" style="width:100%;height:auto;max-width:100%" role="img" aria-label="Cumulative R"></svg>
+        <div class="muted" style="font-size:.82rem">Solid line: your cumulative R. Dashed: the playbook's +0.26R/trade expectancy (42% wins at 1:2).</div>
+      </div>
+      <div class="panel c12">
+        <div class="panel-head"><h2>Trade log</h2><div class="row"><button class="btn" id="copyCsv">Copy CSV</button><button class="btn primary" id="newTrade">New trade</button></div></div>
+        <form id="tradeForm" class="panel" style="background:var(--sunken)" hidden>
+          <div class="fields">
+            <div class="field"><label for="t-date">Date</label><input id="t-date" type="date"></div>
+            <div class="field"><label for="t-ticker">Ticker</label><input id="t-ticker" required autocomplete="off" style="text-transform:uppercase"></div>
+            <div class="field"><label for="t-dir">Direction</label><select id="t-dir"><option>Long</option><option>Short</option></select></div>
+            <div class="field"><label for="t-trig">Trigger</label><select id="t-trig"><option>Reclaim</option><option>Bounce</option><option>Breakdown</option><option>Rejection</option></select></div>
+            <div class="field"><label for="t-time">Entry time</label><input id="t-time" type="time"></div>
+            <div class="field"><label for="t-entry">Entry</label><input id="t-entry" inputmode="decimal" required></div>
+            <div class="field"><label for="t-stop">Initial stop</label><input id="t-stop" inputmode="decimal" required></div>
+            <div class="field"><label for="t-target">Target</label><input id="t-target" inputmode="decimal"></div>
+            <div class="field"><label for="t-exit">Exit</label><input id="t-exit" inputmode="decimal" placeholder="blank = open"></div>
+            <div class="field"><label for="t-shares">Shares</label><input id="t-shares" inputmode="numeric"></div>
+            <div class="field"><label for="t-slip">Slippage $/sh</label><input id="t-slip" inputmode="decimal" value="0"></div>
+            <div class="field"><label for="t-vm">Vol multiple</label><input id="t-vm" inputmode="decimal" placeholder="e.g. 1.8"></div>
+          </div>
+          <fieldset class="fs"><legend class="label">Rule compliance</legend>
+            <div class="row" style="gap:6px 18px">
+              <label class="chk"><input type="checkbox" id="t-f-chase">Chased away from VWAP</label>
+              <label class="chk"><input type="checkbox" id="t-f-vol">Volume below 1.5×</label>
+              <label class="chk"><input type="checkbox" id="t-f-trend">Counter-trend</label>
+              <label class="chk"><input type="checkbox" id="t-f-time">Outside window / news</label>
+              <label class="chk"><input type="checkbox" id="t-f-shot">Screenshot saved</label>
+            </div>
+          </fieldset>
+          <div class="field"><label for="t-notes">Notes</label><textarea id="t-notes" rows="2"></textarea></div>
+          <div class="row"><button class="btn primary" type="submit" id="saveTrade">Save trade</button><button class="btn" type="button" id="cancelTrade">Cancel</button></div>
+        </form>
+        <div id="confirmBox"></div>
+        <div id="tradeTable"></div>
+      </div>
+    </section>
+
+    <!-- PLAYBOOK -->
+    <section data-pane="rules" hidden>
+      <div class="rule-grid">
+        <div class="panel"><h2>Chart setup</h2>
+          <div class="tablebox"><table><thead><tr><th>Indicator</th><th>TF</th><th>Setting</th></tr></thead><tbody>
+            <tr><td>Trend filter</td><td>1H / D</td><td>200 EMA (close)</td></tr>
+            <tr><td>Value anchor</td><td>5m</td><td>Session VWAP (hlc3), 09:30 reset</td></tr>
+            <tr><td>Volume</td><td>5m</td><td>Volume + 20 SMA</td></tr>
+            <tr><td>Stop</td><td>5m</td><td>ATR(14)</td></tr>
+          </tbody></table></div>
+          <p class="muted" style="margin:0;font-size:.85rem">A Pine Script that draws all four and flags valid triggers ships next to this page: <span class="mono">dashboard/vwap_ema_volume.pine</span>.</p>
+        </div>
+        <div class="panel"><h2>Long: trend continuation</h2><ol>
+          <li>Price above the 1H/D 200 EMA.</li>
+          <li>Pullback to VWAP from above. <b>Reclaim</b>: dips below and closes back above. <b>Bounce</b>: low touches VWAP, bullish body closes above.</li>
+          <li>Trigger volume ≥ 1.5 × Vol SMA(20).</li>
+          <li>Buy the trigger close or a break of its high.</li></ol></div>
+        <div class="panel"><h2>Short: trend continuation</h2><ol>
+          <li>Price below the 1H/D 200 EMA.</li>
+          <li>Rally into VWAP from below. <b>Breakdown</b>: pokes above, closes back below. <b>Rejection</b>: wick tags VWAP, bearish close.</li>
+          <li>Trigger volume ≥ 1.5 × Vol SMA(20).</li>
+          <li>Short the trigger close or a break of its low.</li></ol></div>
+        <div class="panel"><h2>Risk and exits</h2><ul>
+          <li>Stop: 1.5 × ATR beyond the VWAP swing extreme.</li>
+          <li>Target: at least 2R.</li>
+          <li>At +1R, move the stop to entry.</li>
+          <li>Hard time stop 15:45 ET. Never hold into the close.</li>
+          <li>Never take counter-trend signals.</li></ul></div>
+        <div class="panel"><h2>Expected profile</h2><ul>
+          <li>Win rate 40–46%.</li>
+          <li>R:R 1:2 minimum.</li>
+          <li>1–3 valid setups a day across 10 liquid names.</li>
+          <li>Losing streaks of 4–6 are normal in chop (SPY in a tight weekly range).</li></ul></div>
+        <div class="panel"><h2>Expectancy</h2>
+          <div class="math">E = (W × avgWin) − (L × avgLoss)<br>E = (0.42 × 2.0R) − (0.58 × 1.0R) = <b>+0.26R</b><br><br>100 trades at $250/R:<br>42 × $500 = +$21,000<br>58 × $250 = −$14,500<br>Net ≈ <b>+$6,500</b> before costs</div>
+          <div class="fields" style="grid-template-columns:repeat(3,1fr)">
+            <div class="field"><label for="e-w">Win %</label><input id="e-w" inputmode="decimal" value="42"></div>
+            <div class="field"><label for="e-rr">Avg win R</label><input id="e-rr" inputmode="decimal" value="2"></div>
+            <div class="field"><label for="e-r">$ per R</label><input id="e-r" inputmode="decimal" value="250"></div>
+          </div>
+          <div id="eOut" class="mono" style="font-size:.9rem"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script>
+(() => {
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const num = v => { const n = parseFloat(String(v ?? "").replace(/[,$\s]/g, "")); return Number.isFinite(n) ? n : NaN; };
+const fx = (n, d = 2) => Number.isFinite(n) ? n.toFixed(d) : "—";
+const fint = n => Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "—";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const toast = msg => { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 2200); };
+
+/* ---------- Eastern-time clock ---------- */
+const etFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short" });
+function etNow() {
+  const p = Object.fromEntries(etFmt.formatToParts(new Date()).map(x => [x.type, x.value]));
+  const h = +p.hour % 24, m = +p.minute, s = +p.second;
+  return { date: `${p.year}-${p.month}-${p.day}`, wd: p.weekday, h, m, s, mins: h * 60 + m + s / 60, hms: `${String(h).padStart(2, "0")}:${p.minute}:${p.second}` };
+}
+const T = (h, m) => h * 60 + m;
+const PHASES = [
+  { id: "pre", from: T(8, 30), to: T(9, 25), name: "Pre-market prep", st: "st-warn", short: "Prep" },
+  { id: "bell", from: T(9, 25), to: T(9, 30), name: "Opening bell", st: "st-warn", short: "" },
+  { id: "obs", from: T(9, 30), to: T(9, 45), name: "Observe only", st: "st-bad", short: "Observe" },
+  { id: "prime", from: T(9, 45), to: T(11, 30), name: "Prime window", st: "st-good", short: "Prime 09:45–11:30" },
+  { id: "lull", from: T(11, 30), to: T(14, 0), name: "Midday lull: stand down", st: "st-warn", short: "Midday lull" },
+  { id: "pm", from: T(14, 0), to: T(15, 45), name: "Afternoon window", st: "st-good", short: "Afternoon" },
+  { id: "flat", from: T(15, 45), to: T(16, 0), name: "Flatten everything", st: "st-bad", short: "Flat" },
+  { id: "gap", from: T(16, 0), to: T(16, 15), name: "Closed", st: "st-idle", short: "" },
+  { id: "post", from: T(16, 15), to: T(17, 0), name: "Post-market review", st: "st-warn", short: "Review" },
+];
+const phaseAt = mins => PHASES.find(p => mins >= p.from && mins < p.to);
+const fmtMin = m => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(Math.floor(m % 60)).padStart(2, "0")}`;
+function windowFor(mins) {
+  if (mins < T(9, 30) || mins >= T(16, 0)) return { ok: "bad", txt: "Market closed" };
+  if (mins < T(9, 45)) return { ok: "bad", txt: "Opening 15 min: observe only, VWAP not settled" };
+  if (mins < T(11, 30)) return { ok: "good", txt: "Prime window 09:45–11:30" };
+  if (mins < T(14, 0)) return { ok: "warn", txt: "Midday lull: stand down or reduce size" };
+  if (mins < T(15, 45)) return { ok: "good", txt: "Afternoon window: only on returning trend volume" };
+  return { ok: "bad", txt: "After 15:45: flatten, no new entries" };
+}
+
+function buildTimeline() {
+  const start = T(8, 30), end = T(17, 0), span = end - start;
+  const colors = { "st-good": "var(--good-soft)", "st-warn": "var(--warn-soft)", "st-bad": "var(--bad-soft)", "st-idle": "var(--sunken)" };
+  const fg = { "st-good": "var(--good)", "st-warn": "var(--warn)", "st-bad": "var(--bad)", "st-idle": "var(--muted)" };
+  $("#tl").innerHTML = PHASES.map(p => `<div title="${p.name} ${fmtMin(p.from)}–${fmtMin(p.to)}" style="flex:${p.to - p.from};background:${colors[p.st]};color:${fg[p.st]}">${p.short}</div>`).join("") + `<div class="now" id="tlNow" hidden></div>`;
+  buildTimeline.pct = m => (m - start) / span * 100;
+  $("#tlTicks").innerHTML = [T(8, 30), T(9, 30), T(11, 30), T(14, 0), T(16, 0), T(17, 0)].map((m, i, a) => `<span class="${i === 1 || i === 4 ? "minor" : ""}" style="position:absolute;left:${(m - start) / span * 100}%;transform:translateX(${i === 0 ? 0 : i === a.length - 1 ? -100 : -50}%)">${fmtMin(m)}</span>`).join("");
+}
+
+let lastDate = null;
+function tick() {
+  const n = etNow();
+  $("#clock").textContent = n.hms;
+  const weekend = n.wd === "Sat" || n.wd === "Sun";
+  const p = weekend ? null : phaseAt(n.mins);
+  const ph = $("#phase");
+  ph.className = "phase " + (p ? p.st : "st-idle");
+  ph.textContent = weekend ? "Weekend: market closed" : p ? p.name : (n.mins < T(8, 30) ? "Before pre-market" : "Session over");
+  let nxt = "";
+  if (!weekend) {
+    const up = PHASES.find(q => q.from > n.mins);
+    if (p) nxt = `ends ${fmtMin(p.to)} · ${Math.ceil(p.to - n.mins)} min left`;
+    else if (up) nxt = `${up.name} at ${fmtMin(up.from)}`;
+  }
+  $("#next").textContent = nxt;
+  const now = $("#tlNow");
+  const pct = buildTimeline.pct(n.mins);
+  now.hidden = weekend || pct < 0 || pct > 100;
+  now.style.left = `calc(${pct}% - 1px)`;
+  $$(".routine-block").forEach(b => b.classList.toggle("active-window", !weekend && b.dataset.from <= n.mins && n.mins < b.dataset.to));
+  if (n.date !== lastDate) { lastDate = n.date; renderRoutine(); renderWatch(); }
+  renderNewsNote(n);
+}
+
+/* ---------- Storage: account db when available, else this browser ---------- */
+const LS_KEY = "vwap-trend-desk-v1";
+const Store = {
+  docs: new Map(), mode: "local", coll: null,
+  init() {
+    try { const raw = localStorage.getItem(LS_KEY); if (raw) for (const [k, v] of Object.entries(JSON.parse(raw))) this.docs.set(k, v); } catch {}
+    this.setMode("local");
+    const c = window.claude;
+    if (!c || typeof c.use !== "function") return;
+    $("#saveState").textContent = "Connecting…";
+    Promise.all([c.use("db"), c.use("user")]).then(async ([db, user]) => {
+      const id = db && user ? await user.id() : null;
+      if (!db || !id) { this.setMode("local"); return; }
+      this.coll = db.collection("data/users/" + id);
+      this.coll.onSnapshot(snap => {
+        this.docs = new Map(snap.docs.map(d => [d.id, d.data()]));
+        this.setMode("db"); renderAll();
+      }, () => { this.coll = null; this.setMode("local"); toast("Account storage unavailable. Saving in this browser."); });
+    }).catch(() => this.setMode("local"));
+  },
+  setMode(m) { this.mode = m; $("#saveState").textContent = m === "db" ? "Saved to your account" : "Saved in this browser"; },
+  get(id) { return this.docs.get(id); },
+  all(prefix) { return [...this.docs.entries()].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => ({ id: k, ...v })); },
+  put(id, data) {
+    const clean = JSON.parse(JSON.stringify(data)); delete clean.id;
+    this.docs.set(id, clean); this.persistLocal();
+    if (this.coll) this.coll.doc(id).set(clean).catch(e => toast("Not saved: " + (e?.message || "storage error")));
+  },
+  del(id) {
+    this.docs.delete(id); this.persistLocal();
+    if (this.coll) this.coll.doc(id).delete().catch(() => toast("Delete failed"));
+  },
+  persistLocal() { if (this.coll) return; try { localStorage.setItem(LS_KEY, JSON.stringify(Object.fromEntries(this.docs))); } catch {} },
+};
+const today = () => etNow().date;
+const dayDoc = () => Store.get("day_" + today()) || {};
+const putDay = patch => Store.put("day_" + today(), { ...dayDoc(), ...patch });
+const settings = () => Store.get("settings") || {};
+
+/* ---------- Today: regime + routine ---------- */
+const IDX = ["SPY", "QQQ"];
+function renderRegime() {
+  const d = dayDoc(), reg = d.regime || {};
+  $("#regime").innerHTML = IDX.map(t => `<div class="row" style="justify-content:space-between"><span class="mono" style="font-weight:600">${t}</span>
+    <div class="seg" role="group" aria-label="${t} vs 200 EMA">${["above", "below", "flat"].map(v => `<button type="button" data-idx="${t}" data-v="${v}" aria-pressed="${reg[t] === v}">${v === "above" ? "Above 200" : v === "below" ? "Below 200" : "Chop"}</button>`).join("")}</div></div>`).join("");
+  const bias = indexBias();
+  const note = $("#regimeNote");
+  note.className = "verdict " + (bias === "long" ? "st-good" : bias === "short" ? "st-bad" : bias === "mixed" ? "st-warn" : "st-idle");
+  note.innerHTML = bias === "long" ? "<b>Long bias.</b>&nbsp;Prioritize longs in names above their 200 EMA."
+    : bias === "short" ? "<b>Short bias.</b>&nbsp;Prioritize shorts in names below their 200 EMA."
+    : bias === "mixed" ? "<b>Mixed or choppy.</b>&nbsp;Expect losing streaks. Trade smaller and only A+ volume."
+    : "Set SPY and QQQ to get today's bias.";
+  $("#newsDay").checked = !!d.newsDay;
+  $("#newsTime").value = d.newsTime || "08:30";
+}
+function indexBias() {
+  const r = dayDoc().regime || {}, a = r.SPY, b = r.QQQ;
+  if (!a || !b) return null;
+  if (a === b && a !== "flat") return a === "above" ? "long" : "short";
+  return "mixed";
+}
+function newsBlocked(mins) {
+  const d = dayDoc(); if (!d.newsDay || !d.newsTime) return false;
+  const [h, m] = d.newsTime.split(":").map(Number); const t = h * 60 + m;
+  return Math.abs(mins - t) <= 5;
+}
+function renderNewsNote(n) {
+  const d = dayDoc(), el = $("#newsNote");
+  if (!d.newsDay) { el.textContent = ""; return; }
+  el.innerHTML = newsBlocked(n.mins) ? `<span class="neg"><b>Blackout now.</b> No entries until 5 min after ${esc(d.newsTime)}.</span>` : `Blackout ${esc(d.newsTime)} ±5 min.`;
+}
+$("#regime").addEventListener("click", e => {
+  const b = e.target.closest("button[data-idx]"); if (!b) return;
+  const reg = { ...(dayDoc().regime || {}) }; reg[b.dataset.idx] = b.dataset.v; putDay({ regime: reg }); renderRegime(); renderSetup();
+});
+$("#newsDay").addEventListener("change", e => { putDay({ newsDay: e.target.checked }); renderNewsNote(etNow()); renderSetup(); });
+$("#newsTime").addEventListener("change", e => { putDay({ newsTime: e.target.value }); renderNewsNote(etNow()); renderSetup(); });
+
+const ROUTINE = [
+  { title: "Pre-market", time: "08:30–09:25", from: T(8, 30), to: T(9, 30), items: [
+    ["macro", "Macro calendar", "CPI, PPI, FOMC, jobs. Mark tier-1 times and stay out ±5 min."],
+    ["index", "SPY / QQQ vs 200 EMA", "Set the regime panel. Favor names moving with the index."],
+    ["screen", "Screen the watchlist", "Pre-mkt vol > 500k, clear catalyst or sector momentum, daily ATR ≥ $2."],
+    ["levels", "Mark key levels", "PDH / PDL and PMH / PML on every chart."]] },
+  { title: "In-market", time: "09:30–16:00", from: T(9, 30), to: T(16, 0), items: [
+    ["observe", "Observe 09:30–09:45", "Let the open shake out. VWAP settles after 09:45."],
+    ["prime", "Work the prime window", "09:45–11:30: pullbacks into VWAP with the HTF trend and a clear volume bar."],
+    ["lull", "Midday discipline", "11:30–14:00: stand down or cut size. Sub-SMA volume means fake reclaims."],
+    ["flat", "Flat by 15:45", "Afternoon setups only on returning trend volume. Close everything at 15:45."]] },
+  { title: "Post-market", time: "16:15–17:00", from: T(16, 15), to: T(17, 0), items: [
+    ["journal", "Journal every trade", "Entry, exit, planned R:R, realized R, slippage."],
+    ["comply", "Rule compliance", "Any chases away from VWAP? Any entries under 1.5× volume?"],
+    ["shots", "Archive screenshots", "5m chart with trigger candle, VWAP and volume bar at entry."]] },
+];
+function renderRoutine() {
+  const done = dayDoc().checks || {};
+  $("#routineDate").textContent = today();
+  $("#routine").innerHTML = ROUTINE.map(b => `<div class="routine-block c4" data-from="${b.from}" data-to="${b.to}" style="border:1px solid var(--line);border-radius:6px;padding:10px;min-width:0">
+    <div class="row" style="justify-content:space-between;margin-bottom:4px"><h3>${b.title}</h3><span class="mono muted" style="font-size:.75rem">${b.time}</span></div>
+    <ul class="checklist">${b.items.map(([k, t, d]) => `<li><label><input type="checkbox" id="chk-${k}" data-k="${k}" ${done[k] ? "checked" : ""}><span><b>${t}</b><span class="d">${d}</span></span></label></li>`).join("")}</ul></div>`).join("");
+  const total = ROUTINE.reduce((a, b) => a + b.items.length, 0), n = Object.values(done).filter(Boolean).length;
+  $("#routinePct").textContent = `${n}/${total}`;
+  $("#routineBar").style.width = `${n / total * 100}%`;
+}
+$("#routine").addEventListener("change", e => {
+  const k = e.target.dataset.k; if (!k) return;
+  putDay({ checks: { ...(dayDoc().checks || {}), [k]: e.target.checked } }); renderRoutine(); tick();
+});
+$("#resetRoutine").addEventListener("click", () => { putDay({ checks: {} }); renderRoutine(); tick(); });
+
+/* ---------- Setup validator ---------- */
+const SF = ["ticker", "time", "ema", "vwap", "o", "h", "l", "c", "vol", "vsma", "atr", "tol", "swing", "risk", "entry"];
+const EXAMPLE = { ticker: "NVDA", time: "10:15", ema: "171.40", vwap: "182.60", o: "182.68", h: "183.02", l: "182.55", c: "182.88", vol: "1240000", vsma: "710000", atr: "0.62", tol: "0.05", swing: "", risk: "250", entry: "close" };
+const readSetup = () => Object.fromEntries(SF.map(k => [k, $("#s-" + k).value]));
+let lastPlan = null;
+
+function evaluate(s) {
+  const v = Object.fromEntries(["ema", "vwap", "o", "h", "l", "c", "vol", "vsma", "atr", "tol", "swing", "risk"].map(k => [k, num(s[k])]));
+  const need = ["ema", "vwap", "o", "h", "l", "c", "vol", "vsma", "atr"];
+  const missing = need.filter(k => !Number.isFinite(v[k]));
+  if (missing.length) return { incomplete: true, missing };
+  const tol = Number.isFinite(v.tol) ? Math.abs(v.tol) : 0;
+  const dir = v.c > v.ema ? "Long" : v.c < v.ema ? "Short" : null;
+  let trigger = null;
+  if (dir === "Long") {
+    if (v.l < v.vwap - tol && v.c > v.vwap) trigger = "Reclaim";
+    else if (v.l <= v.vwap + tol && v.c > v.vwap && v.c > v.o) trigger = "Bounce";
+  } else if (dir === "Short") {
+    if (v.h > v.vwap + tol && v.c < v.vwap) trigger = "Breakdown";
+    else if (v.h >= v.vwap - tol && v.c < v.vwap && v.c < v.o) trigger = "Rejection";
+  }
+  const volMult = v.vsma > 0 ? v.vol / v.vsma : NaN;
+  const [hh, mm] = (s.time || "").split(":").map(Number);
+  const mins = Number.isFinite(hh) ? hh * 60 + mm : NaN;
+  const win = Number.isFinite(mins) ? windowFor(mins) : { ok: "bad", txt: "Set the candle time" };
+  const bias = indexBias();
+  const ext = Math.abs(v.c - v.vwap) / v.atr;
+  const rules = [];
+  const add = (ok, title, why) => rules.push({ ok, title, why });
+  add(dir ? "good" : "bad", dir ? `Trend: ${dir === "Long" ? "above" : "below"} 200 EMA → ${dir.toLowerCase()}s only` : "Trend: price sits on the 200 EMA", `Close ${fx(v.c)} vs EMA ${fx(v.ema)} (${fx((v.c - v.ema) / v.ema * 100, 1)}%)`);
+  add(trigger ? "good" : "bad", trigger ? `VWAP trigger: ${trigger}` : "No valid VWAP trigger",
+    dir === "Long" ? "Needs a close above VWAP after a dip below it (reclaim) or a low that tags it with a bullish body (bounce)."
+    : dir === "Short" ? "Needs a close below VWAP after poking above it (breakdown) or a high that tags it with a bearish body (rejection)."
+    : "Direction undefined");
+  add(volMult >= 1.5 ? "good" : "bad", `Volume ${fx(volMult, 2)}× SMA(20)`, volMult >= 1.5 ? "Institutional participation confirmed." : "Below 1.5×: likely absorption, skip.");
+  add(win.ok, "Time window", win.txt);
+  const blocked = Number.isFinite(mins) && newsBlocked(mins);
+  add(blocked ? "bad" : "good", blocked ? "Inside news blackout" : "No tier-1 news within ±5 min", blocked ? "Wait 5 minutes after the release." : "From the Today tab.");
+  if (bias) {
+    const aligned = (bias === "long" && dir === "Long") || (bias === "short" && dir === "Short");
+    add(aligned ? "good" : "warn", aligned ? "Aligned with SPY / QQQ" : "Not aligned with the index", aligned ? `Index bias: ${bias}.` : `Index bias: ${bias}. Allowed, but lower priority.`);
+  } else add("warn", "Index regime not set", "Set SPY / QQQ on the Today tab.");
+  add(ext <= 0.5 ? "good" : ext <= 1 ? "warn" : "bad", `Distance from VWAP ${fx(ext, 2)} ATR`, ext <= 0.5 ? "At value." : "Extended from VWAP: that is a chase.");
+
+  let plan = null;
+  if (dir) {
+    const long = dir === "Long";
+    const swing = Number.isFinite(v.swing) ? v.swing : long ? v.l : v.h;
+    const entry = s.entry === "break" ? (long ? v.h + 0.01 : v.l - 0.01) : v.c;
+    const stop = long ? swing - 1.5 * v.atr : swing + 1.5 * v.atr;
+    const risk = Math.abs(entry - stop);
+    const target = long ? entry + 2 * risk : entry - 2 * risk;
+    const be = long ? entry + risk : entry - risk;
+    const riskD = Number.isFinite(v.risk) ? v.risk : 250;
+    const shares = risk > 0 ? Math.floor(riskD / risk) : 0;
+    plan = { dir, entry, stop, target, be, risk, shares, notional: shares * entry, riskD, swing };
+  }
+  const fails = rules.filter(r => r.ok === "bad").length, warns = rules.filter(r => r.ok === "warn").length;
+  return { dir, trigger, volMult, rules, plan, fails, warns, v, mins };
+}
+
+function candleSvg(v, trig) {
+  const W = 220, H = 170, pad = 18;
+  const vals = [v.h, v.l, v.vwap, v.o, v.c].filter(Number.isFinite);
+  let lo = Math.min(...vals), hi = Math.max(...vals); const span = (hi - lo) || 1; lo -= span * .25; hi += span * .25;
+  const y = p => pad + (hi - p) / (hi - lo) * (H - 2 * pad);
+  const up = v.c >= v.o, col = up ? "var(--good)" : "var(--bad)";
+  const x = 110, bw = 30, top = y(Math.max(v.o, v.c)), bot = y(Math.min(v.o, v.c));
+  return `<rect x="0" y="0" width="${W}" height="${H}" rx="6" fill="var(--sunken)"/>
+    <line x1="10" x2="${W - 10}" y1="${y(v.vwap)}" y2="${y(v.vwap)}" stroke="var(--vwap)" stroke-width="2"/>
+    <text x="12" y="${y(v.vwap) - 5}" font-size="10" fill="var(--vwap)">VWAP ${fx(v.vwap)}</text>
+    <line x1="${x}" x2="${x}" y1="${y(v.h)}" y2="${y(v.l)}" stroke="${col}" stroke-width="2"/>
+    <rect x="${x - bw / 2}" y="${top}" width="${bw}" height="${Math.max(2, bot - top)}" fill="${col}" rx="2"/>
+    <text x="${x + bw / 2 + 6}" y="${y(v.h) + 4}" font-size="10" fill="var(--muted)">H ${fx(v.h)}</text>
+    <text x="${x + bw / 2 + 6}" y="${y(v.l) + 4}" font-size="10" fill="var(--muted)">L ${fx(v.l)}</text>
+    <text x="${W - 10}" y="${H - 6}" font-size="10" text-anchor="end" fill="var(--ink)" font-weight="600">${trig || "no trigger"}</text>`;
+}
+
+function renderSetup() {
+  const s = readSetup();
+  try { localStorage.setItem(LS_KEY + "-setup", JSON.stringify(s)); } catch {}
+  const r = evaluate(s);
+  const vd = $("#verdict");
+  if (r.incomplete) {
+    vd.className = "verdict st-idle"; vd.innerHTML = `<strong>Incomplete</strong><span>Fill in: ${r.missing.join(", ")}</span>`;
+    $("#ruleList").innerHTML = ""; $("#candle").innerHTML = ""; $("#plan").innerHTML = ""; $("#ladder").innerHTML = ""; lastPlan = null; $("#logSetup").disabled = true; return;
+  }
+  const ok = r.fails === 0;
+  vd.className = "verdict " + (ok ? (r.warns ? "st-warn" : "st-good") : "st-bad");
+  vd.innerHTML = ok ? `<strong>${r.dir.toUpperCase()} · ${r.trigger.toUpperCase()}</strong><span>${r.warns ? `Valid, ${r.warns} caution${r.warns > 1 ? "s" : ""}` : "All rules pass"}</span>`
+    : `<strong>NO TRADE</strong><span>${r.fails} rule${r.fails > 1 ? "s" : ""} failed</span>`;
+  const icon = { good: ["✓", "st-good"], warn: ["!", "st-warn"], bad: ["✕", "st-bad"] };
+  $("#ruleList").innerHTML = r.rules.map(x => `<li><span class="ic ${icon[x.ok][1]}">${icon[x.ok][0]}</span><span>${esc(x.title)}<span class="why">${esc(x.why)}</span></span></li>`).join("");
+  $("#candle").innerHTML = candleSvg(r.v, r.trigger);
+  const p = r.plan;
+  if (p) {
+    $("#plan").innerHTML = [["Entry", fx(p.entry)], ["Stop", fx(p.stop)], ["Target 2R", fx(p.target)], ["Risk / share", "$" + fx(p.risk)], ["Shares", fint(p.shares)], ["Position", "$" + fint(p.notional)]]
+      .map(([k, v]) => `<div><span class="label">${k}</span><span class="v">${v}</span></div>`).join("");
+    const rows = [["Target", "+2R", p.target, "var(--good)"], ["Stop → entry", "+1R", p.be, "var(--ema)"], ["Entry", "0R", p.entry, "var(--ink)"], ["VWAP", "", r.v.vwap, "var(--vwap)"], ["Swing extreme", "", p.swing, "var(--muted)"], ["Stop", "−1R", p.stop, "var(--bad)"]];
+    if (p.dir === "Short") rows.reverse();
+    $("#ladder").innerHTML = rows.map(([k, rr, px, c]) => `<div style="border-left-color:${c}"><span>${k}</span><span class="muted">${rr}</span><span>${fx(px)}</span></div>`).join("");
+  } else { $("#plan").innerHTML = ""; $("#ladder").innerHTML = ""; }
+  lastPlan = p ? { ...p, ticker: s.ticker.toUpperCase(), trigger: r.trigger, volMult: r.volMult, time: s.time, valid: ok, rules: r.rules } : null;
+  $("#logSetup").disabled = !p;
+  $("#logHint").textContent = p && !ok ? "Logging a failed setup marks it non-compliant." : "";
+}
+$$("[data-pane='setup'] input, [data-pane='setup'] select").forEach(el => el.addEventListener("input", renderSetup));
+$("#loadExample").addEventListener("click", () => { for (const k of SF) $("#s-" + k).value = EXAMPLE[k]; renderSetup(); });
+$("#clearSetup").addEventListener("click", () => { for (const k of SF) if (!["tol", "risk", "entry", "time"].includes(k)) $("#s-" + k).value = ""; const n = etNow(); $("#s-time").value = fmtMin(Math.floor(n.mins / 5) * 5); renderSetup(); });
+$("#logSetup").addEventListener("click", () => {
+  if (!lastPlan) return;
+  const p = lastPlan, bad = t => p.rules.some(r => r.ok === "bad" && r.title.startsWith(t));
+  openTradeForm({ date: today(), ticker: p.ticker, dir: p.dir, trig: p.trigger || (p.dir === "Long" ? "Bounce" : "Rejection"), time: p.time,
+    entry: fx(p.entry), stop: fx(p.stop), target: fx(p.target), shares: p.shares, vm: fx(p.volMult, 2),
+    f: { vol: p.volMult < 1.5, chase: bad("Distance"), time: bad("Time") || bad("Inside news"), trend: !p.dir } });
+  selectTab("journal");
+});
+
+/* ---------- Watchlist ---------- */
+const watchDocId = () => "watch_" + today();
+const watchRows = () => (Store.get(watchDocId()) || {}).rows || [];
+const WCOLS = [["t", "text", ""], ["pmv", "num", "pre-mkt shares"], ["atr", "num", "$"], ["cat", "text", "earnings, upgrade…"], ["trend", "sel", ""], ["pdh", "num", ""], ["pdl", "num", ""], ["pmh", "num", ""], ["pml", "num", ""]];
+function screen(r) {
+  const why = [];
+  if (!(num(r.pmv) > 500000)) why.push("pre-mkt vol ≤ 500k");
+  if (!(num(r.atr) >= 2)) why.push("ATR < $2");
+  if (!String(r.cat || "").trim()) why.push("no catalyst");
+  return why;
+}
+function renderWatch() {
+  const rows = watchRows(), bias = indexBias();
+  if (!rows.length) {
+    $("#watchBody").innerHTML = `<tr><td colspan="11"><div class="empty">No tickers for ${today()} yet.<button class="btn" id="seedWatch">Start from NVDA, AAPL, MSFT, AMD, TSLA</button></div></td></tr>`;
+    $("#watchNote").textContent = ""; return;
+  }
+  $("#watchBody").innerHTML = rows.map((r, i) => {
+    const why = screen(r), pass = !why.length;
+    const align = bias && r.trend && ((bias === "long" && r.trend === "above") || (bias === "short" && r.trend === "below"));
+    return `<tr data-i="${i}">${WCOLS.map(([k, kind, ph]) => {
+      if (kind === "sel") return `<td><select data-k="${k}" id="w-${i}-${k}" aria-label="Trend"><option value=""></option><option value="above" ${r.trend === "above" ? "selected" : ""}>Above</option><option value="below" ${r.trend === "below" ? "selected" : ""}>Below</option></select></td>`;
+      return `<td${kind === "num" ? ' class="num"' : ""}><input data-k="${k}" id="w-${i}-${k}" value="${esc(r[k] ?? "")}" placeholder="${ph}" aria-label="${k}" style="${k === "t" ? "width:70px;text-transform:uppercase" : k === "cat" ? "width:160px" : "width:90px;text-align:right"}" ${kind === "num" ? 'inputmode="decimal"' : ""}></td>`;
+    }).join("")}<td><span class="badge ${pass ? (align ? "st-good" : "st-warn") : "st-bad"}" title="${esc(why.join(", "))}">${pass ? (align ? "A-list" : "Pass") : "Fail"}</span>${pass ? "" : `<div class="muted" style="font-size:.72rem">${esc(why.join(", "))}</div>`}</td>
+    <td><button class="btn ghost" data-del="${i}" aria-label="Remove">✕</button></td></tr>`;
+  }).join("");
+  const pass = rows.filter(r => !screen(r).length).length;
+  $("#watchNote").textContent = `${pass} of ${rows.length} pass the screen. A-list = passes and its 200 EMA side matches today's index bias.`;
+}
+const saveWatch = rows => Store.put(watchDocId(), { rows });
+$("#addWatch").addEventListener("click", () => { saveWatch([...watchRows(), { t: "" }]); renderWatch(); const last = $$("#watchBody tr").pop(); last?.querySelector("input")?.focus(); });
+$("#watchBody").addEventListener("click", e => {
+  if (e.target.id === "seedWatch") { saveWatch(["NVDA", "AAPL", "MSFT", "AMD", "TSLA"].map(t => ({ t }))); renderWatch(); return; }
+  const d = e.target.closest("[data-del]"); if (!d) return;
+  const rows = watchRows(); rows.splice(+d.dataset.del, 1); saveWatch(rows); renderWatch();
+});
+$("#watchBody").addEventListener("change", e => {
+  const tr = e.target.closest("tr[data-i]"); if (!tr) return;
+  const rows = watchRows().map(r => ({ ...r })); const k = e.target.dataset.k;
+  rows[+tr.dataset.i][k] = k === "t" ? e.target.value.toUpperCase() : e.target.value; saveWatch(rows); renderWatch();
+});
+
+/* ---------- Journal ---------- */
+const trades = () => Store.all("t_").sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+function rMult(t) {
+  const e = num(t.entry), s = num(t.stop), x = num(t.exit), slip = num(t.slip) || 0;
+  if (![e, s, x].every(Number.isFinite) || e === s) return NaN;
+  const risk = Math.abs(e - s), sign = t.dir === "Short" ? -1 : 1;
+  return (sign * (x - e) - Math.abs(slip)) / risk;
+}
+const plannedRR = t => { const e = num(t.entry), s = num(t.stop), g = num(t.target); return Number.isFinite(g) && e !== s ? Math.abs(g - e) / Math.abs(e - s) : NaN; };
+const pnl = t => { const e = num(t.entry), x = num(t.exit), sh = num(t.shares), slip = num(t.slip) || 0; return [e, x, sh].every(Number.isFinite) ? ((t.dir === "Short" ? e - x : x - e) - Math.abs(slip)) * sh : NaN; };
+const violations = t => ["chase", "vol", "trend", "time"].filter(k => t.f?.[k]);
+
+let editing = null, pendingDelete = null;
+function openTradeForm(t = {}) {
+  editing = t.id || null;
+  const f = $("#tradeForm"); f.hidden = false;
+  $("#t-date").value = t.date || today(); $("#t-ticker").value = t.ticker || ""; $("#t-dir").value = t.dir || "Long"; $("#t-trig").value = t.trig || "Bounce";
+  $("#t-time").value = t.time || ""; $("#t-entry").value = t.entry ?? ""; $("#t-stop").value = t.stop ?? ""; $("#t-target").value = t.target ?? ""; $("#t-exit").value = t.exit ?? "";
+  $("#t-shares").value = t.shares ?? ""; $("#t-slip").value = t.slip ?? "0"; $("#t-vm").value = t.vm ?? ""; $("#t-notes").value = t.notes || "";
+  for (const k of ["chase", "vol", "trend", "time", "shot"]) $("#t-f-" + k).checked = !!t.f?.[k];
+  $("#saveTrade").textContent = editing ? "Update trade" : "Save trade";
+  $("#t-ticker").focus();
+}
+$("#newTrade").addEventListener("click", () => openTradeForm());
+$("#cancelTrade").addEventListener("click", () => { $("#tradeForm").hidden = true; editing = null; });
+$("#tradeForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const t = { date: $("#t-date").value, ticker: $("#t-ticker").value.trim().toUpperCase(), dir: $("#t-dir").value, trig: $("#t-trig").value, time: $("#t-time").value,
+    entry: $("#t-entry").value, stop: $("#t-stop").value, target: $("#t-target").value, exit: $("#t-exit").value, shares: $("#t-shares").value, slip: $("#t-slip").value,
+    vm: $("#t-vm").value, notes: $("#t-notes").value, f: Object.fromEntries(["chase", "vol", "trend", "time", "shot"].map(k => [k, $("#t-f-" + k).checked])) };
+  if (!Number.isFinite(num(t.entry)) || !Number.isFinite(num(t.stop)) || num(t.entry) === num(t.stop)) { toast("Entry and stop must be numbers and differ"); return; }
+  if (Number.isFinite(num(t.vm)) && num(t.vm) < 1.5) t.f.vol = true;
+  const old = editing ? Store.get(editing) : null;
+  if (old?.example) t.example = true;
+  Store.put(editing || "t_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t);
+  $("#tradeForm").hidden = true; editing = null; toast("Trade saved"); renderJournal();
+});
+
+function stats(list) {
+  const closed = list.filter(t => Number.isFinite(rMult(t)));
+  const Rs = closed.map(rMult), wins = Rs.filter(r => r > 0), losses = Rs.filter(r => r <= 0);
+  let maxL = 0, cur = 0; for (const r of Rs) { cur = r <= 0 ? cur + 1 : 0; maxL = Math.max(maxL, cur); }
+  let curStreak = 0; for (let i = Rs.length - 1; i >= 0 && Rs[i] <= 0; i--) curStreak++;
+  const sum = a => a.reduce((x, y) => x + y, 0);
+  const compliant = list.filter(t => !violations(t).length).length;
+  return { n: closed.length, open: list.length - closed.length, Rs, wr: closed.length ? wins.length / closed.length : NaN,
+    avgW: wins.length ? sum(wins) / wins.length : NaN, avgL: losses.length ? sum(losses) / losses.length : NaN,
+    exp: closed.length ? sum(Rs) / closed.length : NaN, totR: sum(Rs), net: sum(closed.map(pnl).filter(Number.isFinite)),
+    maxL, curStreak, comp: list.length ? compliant / list.length : NaN, today: list.filter(t => t.date === today()).length };
+}
+function renderJournal() {
+  const list = trades(), st = stats(list), hasEx = list.some(t => t.example);
+  $("#statScope").textContent = list.length ? `${st.n} closed · ${st.open} open${hasEx ? " · includes example trades" : ""}` : "";
+  const wrState = !Number.isFinite(st.wr) ? "" : st.wr >= 0.40 && st.wr <= 0.46 ? "On profile (40–46%)" : st.wr > 0.46 ? "Above profile" : "Below profile";
+  const tile = (label, v, sub, cls = "") => `<div class="tile"><span class="label">${label}</span><span class="v ${cls}">${v}</span><span class="s">${sub}</span></div>`;
+  $("#tiles").innerHTML = [
+    tile("Win rate", Number.isFinite(st.wr) ? fx(st.wr * 100, 1) + "%" : "—", wrState || "Expected 40–46%"),
+    tile("Expectancy", Number.isFinite(st.exp) ? (st.exp >= 0 ? "+" : "") + fx(st.exp, 2) + "R" : "—", "Playbook: +0.26R / trade", st.exp > 0 ? "pos" : st.exp < 0 ? "neg" : ""),
+    tile("Total R", st.n ? (st.totR >= 0 ? "+" : "") + fx(st.totR, 1) + "R" : "—", `Avg win ${fx(st.avgW, 2)}R · loss ${fx(st.avgL, 2)}R`, st.totR > 0 ? "pos" : st.totR < 0 ? "neg" : ""),
+    tile("Net P&L", st.n ? (st.net >= 0 ? "+$" : "−$") + fint(Math.abs(st.net)) : "—", "After slippage, before fees", st.net > 0 ? "pos" : st.net < 0 ? "neg" : ""),
+    tile("Losing streak", st.n ? `${st.curStreak} now · ${st.maxL} max` : "—", st.curStreak >= 7 ? "Beyond 4–6: check regime and rules" : "4–6 is normal in chop", st.curStreak >= 7 ? "neg" : ""),
+    tile("Rule compliance", Number.isFinite(st.comp) ? fx(st.comp * 100, 0) + "%" : "—", `Trades today: ${st.today} (aim 1–3)`, st.comp < 0.9 ? "neg" : ""),
+  ].join("");
+  drawCurve(st.Rs);
+
+  const box = $("#tradeTable");
+  if (!list.length) {
+    box.innerHTML = `<div class="empty" style="border:1px dashed var(--line);border-radius:6px"><b>No trades logged yet.</b>Log one from the Setup check tab or with New trade.<button class="btn" id="loadDemo">Load 12 example trades</button></div>`;
+    return;
+  }
+  box.innerHTML = `${hasEx ? `<div class="row" style="margin-bottom:8px"><span class="badge st-warn">Example data</span><span class="muted" style="font-size:.82rem">Rows marked example are sample trades, not yours.</span><button class="btn ghost" id="clearDemo">Remove examples</button></div>` : ""}
+  <div class="tablebox"><table><thead><tr><th>Date</th><th>Ticker</th><th>Side</th><th>Trigger</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Exit</th><th class="num">Plan R:R</th><th class="num">Result</th><th class="num">P&amp;L</th><th class="num">Vol×</th><th>Rules</th><th>Notes</th><th></th></tr></thead><tbody>
+  ${list.slice().reverse().map(t => {
+    const r = rMult(t), v = violations(t), p = pnl(t);
+    return `<tr><td class="mono">${esc(t.date)}${t.time ? " " + esc(t.time) : ""}</td><td><b>${esc(t.ticker)}</b>${t.example ? ' <span class="badge st-warn">ex</span>' : ""}</td>
+      <td><span class="${t.dir === "Long" ? "pos" : "neg"}">${esc(t.dir)}</span></td><td>${esc(t.trig)}</td>
+      <td class="num">${esc(t.entry)}</td><td class="num">${esc(t.stop)}</td><td class="num">${esc(t.target)}</td><td class="num">${t.exit ? esc(t.exit) : '<span class="badge st-idle">open</span>'}</td>
+      <td class="num">${Number.isFinite(plannedRR(t)) ? "1:" + fx(plannedRR(t), 1) : "—"}</td>
+      <td class="num ${r > 0 ? "pos" : r < 0 ? "neg" : ""}">${Number.isFinite(r) ? (r >= 0 ? "+" : "") + fx(r, 2) + "R" : "—"}</td>
+      <td class="num ${p > 0 ? "pos" : p < 0 ? "neg" : ""}">${Number.isFinite(p) ? (p >= 0 ? "+" : "−") + fint(Math.abs(p)) : "—"}</td>
+      <td class="num">${t.vm ? esc(t.vm) : "—"}</td>
+      <td>${v.length ? `<span class="badge st-bad" title="${esc(v.join(", "))}">${v.length} broken</span>` : '<span class="badge st-good">clean</span>'}${t.f?.shot ? "" : ' <span class="badge st-idle" title="No screenshot">no shot</span>'}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis" title="${esc(t.notes)}">${esc(t.notes)}</td>
+      <td><div class="row" style="flex-wrap:nowrap;gap:2px"><button class="btn ghost" data-edit="${esc(t.id)}">Edit</button><button class="btn ghost" data-rm="${esc(t.id)}" aria-label="Delete">✕</button></div></td></tr>`;
+  }).join("")}</tbody></table></div>`;
+}
+function drawCurve(Rs) {
+  const W = 900, H = 200, L = 44, R = 12, Tp = 14, B = 26, svg = $("#curve");
+  const n = Math.max(Rs.length, 10);
+  const cum = [0]; for (const r of Rs) cum.push(cum[cum.length - 1] + r);
+  const exp = Array.from({ length: n + 1 }, (_, i) => i * 0.26);
+  const lo = Math.min(0, ...cum, ...exp), hi = Math.max(1, ...cum, ...exp);
+  const pad = (hi - lo) * 0.08, y0 = lo - pad, y1 = hi + pad;
+  const X = i => L + i / n * (W - L - R), Y = v => Tp + (y1 - v) / (y1 - y0) * (H - Tp - B);
+  const step = Math.max(1, Math.ceil((y1 - y0) / 5));
+  let grid = "";
+  for (let v = Math.ceil(y0 / step) * step; v <= y1; v += step) grid += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)" ${v === 0 ? "" : 'stroke-dasharray="2 4"'}/><text x="${L - 6}" y="${Y(v) + 4}" font-size="11" text-anchor="end" fill="var(--muted)">${v > 0 ? "+" : ""}${v}R</text>`;
+  const path = arr => arr.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+  const last = cum.length - 1;
+  svg.innerHTML = `${grid}<text x="${L}" y="${H - 6}" font-size="11" fill="var(--muted)">trade 0</text><text x="${W - R}" y="${H - 6}" font-size="11" text-anchor="end" fill="var(--muted)">trade ${n}</text>
+    <path d="${path(exp)}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="6 5"/>
+    ${Rs.length ? `<path d="${path(cum)}L${X(last)},${Y(0)}L${X(0)},${Y(0)}Z" fill="var(--ema-soft)" opacity=".7"/><path d="${path(cum)}" fill="none" stroke="var(--ema)" stroke-width="2.5"/>
+    <circle cx="${X(last)}" cy="${Y(cum[last])}" r="4.5" fill="var(--ema)"/><text x="${Math.min(X(last) + 8, W - R - 40)}" y="${Y(cum[last]) - 8}" font-size="12" font-weight="600" fill="var(--ink)">${cum[last] >= 0 ? "+" : ""}${fx(cum[last], 1)}R</text>`
+    : `<text x="${W / 2}" y="${H / 2}" font-size="13" text-anchor="middle" fill="var(--muted)">Close a trade to start the curve</text>`}`;
+}
+$("#tradeTable").addEventListener("click", e => {
+  if (e.target.id === "loadDemo") { loadDemo(); return; }
+  if (e.target.id === "clearDemo") { trades().filter(t => t.example).forEach(t => Store.del(t.id)); renderJournal(); toast("Examples removed"); return; }
+  const ed = e.target.closest("[data-edit]"); if (ed) { const t = Store.get(ed.dataset.edit); openTradeForm({ ...t, id: ed.dataset.edit }); $("#tradeForm").scrollIntoView({ block: "nearest" }); return; }
+  const rm = e.target.closest("[data-rm]"); if (rm) {
+    pendingDelete = rm.dataset.rm; const t = Store.get(pendingDelete);
+    $("#confirmBox").innerHTML = `<div class="confirm">Delete ${esc(t?.ticker)} ${esc(t?.date)}? This cannot be undone.<button class="btn" id="yesDel">Delete</button><button class="btn ghost" id="noDel">Keep</button></div>`;
+  }
+});
+$("#confirmBox").addEventListener("click", e => {
+  if (e.target.id === "yesDel" && pendingDelete) { Store.del(pendingDelete); toast("Trade deleted"); renderJournal(); }
+  if (e.target.id === "yesDel" || e.target.id === "noDel") { pendingDelete = null; $("#confirmBox").innerHTML = ""; }
+});
+function loadDemo() {
+  const base = new Date(); const day = i => { const d = new Date(base); d.setDate(d.getDate() - (12 - i) * 2); return d.toISOString().slice(0, 10); };
+  // [ticker, dir, trig, entry, stop, exitR, vm]
+  const rows = [["NVDA", "Long", "Bounce", 182.4, 181.2, 2, 1.9], ["AMD", "Long", "Reclaim", 158.1, 156.9, -1, 1.6], ["TSLA", "Short", "Rejection", 241.5, 243.6, 2, 2.3], ["AAPL", "Long", "Bounce", 228.3, 227.4, -1, 1.5],
+    ["MSFT", "Long", "Reclaim", 431.2, 429.1, 0, 1.7], ["NVDA", "Long", "Reclaim", 185.0, 183.7, 2, 2.1], ["META", "Short", "Breakdown", 588.0, 591.2, -1, 1.2], ["AMD", "Long", "Bounce", 160.2, 159.0, -1, 1.8],
+    ["TSLA", "Short", "Breakdown", 236.4, 238.9, 2, 2.6], ["AAPL", "Long", "Reclaim", 230.1, 229.1, -1, 1.6], ["NVDA", "Long", "Bounce", 187.3, 186.0, 2, 1.9], ["MSFT", "Long", "Bounce", 434.0, 432.0, -1, 1.5]];
+  rows.forEach(([tk, dir, trig, e, s, xr, vm], i) => {
+    const risk = Math.abs(e - s), sg = dir === "Short" ? -1 : 1, sh = Math.floor(250 / risk);
+    Store.put(`t_ex${String(i).padStart(2, "0")}`, { example: true, date: day(i), time: "10:" + String(5 + i * 3).padStart(2, "0"), ticker: tk, dir, trig, entry: fx(e), stop: fx(s), target: fx(e + sg * 2 * risk), exit: fx(e + sg * xr * risk), shares: String(sh), slip: "0.02", vm: String(vm), notes: xr === 0 ? "Stopped at breakeven after +1R" : "", f: { vol: vm < 1.5, chase: false, trend: false, time: false, shot: i % 4 !== 1 } });
+  });
+  renderJournal(); toast("12 example trades loaded");
+}
+$("#copyCsv").addEventListener("click", () => {
+  const head = ["date", "time", "ticker", "dir", "trigger", "entry", "stop", "target", "exit", "shares", "slippage", "vol_mult", "planned_rr", "realized_r", "pnl", "violations", "notes"];
+  const lines = [head.join(",")].concat(trades().map(t => [t.date, t.time, t.ticker, t.dir, t.trig, t.entry, t.stop, t.target, t.exit, t.shares, t.slip, t.vm, fx(plannedRR(t), 2), fx(rMult(t), 2), fx(pnl(t), 2), violations(t).join("|"), `"${String(t.notes || "").replace(/"/g, '""')}"`].join(",")));
+  const text = lines.join("\n");
+  const fallback = () => { const ta = document.createElement("textarea"); ta.value = text; ta.rows = 6; ta.style.width = "100%"; $("#confirmBox").replaceChildren(ta); ta.select(); toast("Select-all and copy the CSV above"); };
+  try { navigator.clipboard.writeText(text).then(() => toast(`Copied ${lines.length - 1} trades as CSV`), fallback); } catch { fallback(); }
+});
+
+/* ---------- Expectancy calc ---------- */
+function renderExp() {
+  const w = num($("#e-w").value) / 100, rr = num($("#e-rr").value), d = num($("#e-r").value);
+  if (![w, rr, d].every(Number.isFinite)) { $("#eOut").textContent = "Enter numbers"; return; }
+  const e = w * rr - (1 - w), be = 1 / (1 + rr);
+  $("#eOut").innerHTML = `E = <b class="${e >= 0 ? "pos" : "neg"}">${e >= 0 ? "+" : ""}${fx(e, 2)}R</b> per trade · 100 trades ≈ <b>${e >= 0 ? "+" : "−"}$${fint(Math.abs(e * 100 * d))}</b><br>Break-even win rate at 1:${fx(rr, 1)} = ${fx(be * 100, 1)}%`;
+}
+$$("#e-w, #e-rr, #e-r").forEach(el => el.addEventListener("input", renderExp));
+
+/* ---------- Tabs ---------- */
+const TABS = ["today", "setup", "watchlist", "journal", "rules"];
+function selectTab(id) {
+  if (!TABS.includes(id)) id = "today";
+  $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === id));
+  $$("[data-pane]").forEach(p => p.hidden = p.dataset.pane !== id);
+  try { history.replaceState(null, "", "#" + id); } catch {}
+  try { localStorage.setItem(LS_KEY + "-tab", id); } catch {}
+}
+$("nav.tabs").addEventListener("click", e => { const b = e.target.closest("button[data-tab]"); if (b) selectTab(b.dataset.tab); });
+
+function renderAll() { renderRegime(); renderRoutine(); renderSetup(); renderWatch(); renderJournal(); }
+
+/* ---------- Boot ---------- */
+buildTimeline();
+try { const s = JSON.parse(localStorage.getItem(LS_KEY + "-setup") || "null"); if (s) for (const k of SF) if (s[k] != null) $("#s-" + k).value = s[k]; } catch {}
+Store.init();
+renderAll(); renderExp(); tick();
+setInterval(tick, 1000);
+let startTab = (location.hash || "").slice(1);
+if (!TABS.includes(startTab)) { try { startTab = localStorage.getItem(LS_KEY + "-tab") || "today"; } catch { startTab = "today"; } }
+selectTab(startTab);
+})();
+</script>
