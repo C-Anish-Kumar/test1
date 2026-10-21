@@ -24,6 +24,12 @@ Opened as the claude.ai artifact, the page uses your **Interactive Brokers** con
 - **Setup check → Pull last 5m bar** fills the last completed regular-session 5m candle for the ticker, plus VWAP, Vol SMA(20), ATR(14) and the 200 EMA, then runs the rule check. **Refresh every minute** keeps it current.
 - **Watchlist → Fill & scan from IBKR** fills pre-market volume, daily ATR(14), 200 EMA side, PDH / PDL and PMH / PML for every ticker, and shows whether the last 5m bar is a valid setup. Click a signal to open it in Setup check. **Rescan every 5 min** repeats it.
 
+### Alerts
+
+Tick **Auto-scan & alert every 5 min** on the Watchlist tab. The page scans 20 seconds after every 5m bar closes. When a ticker's just-closed bar passes every rule, it raises an alert once for that bar: a banner at the top of every tab with entry, stop, target and share size, an optional two-tone chime (**Sound**), and a line in **Today's alerts**. **Refresh every minute** on Setup check alerts the same way for its ticker. Bars older than 10 minutes never alert, the time-window and news-blackout rules keep alerts out of the first 15 minutes, the news blackout and the time after 15:45, and midday setups alert with a caution badge.
+
+Alerts run inside the page, so keep it open (a background tab is fine). Browser notifications are not available in claude.ai artifacts. For phone or email alerts, use the TradingView indicator's alert conditions.
+
 The page computes the indicators itself from IBKR bars: session VWAP from hlc3 × volume of today's regular-session bars, Vol SMA(20) including the current bar, Wilder ATR(14), and EMA(200) on 1H (three months of RTH bars) or daily (one year) closes. These follow TradingView's definitions, so values should match the chart closely but can differ slightly from TradingView's own feed. Prices are real-time or delayed depending on your IBKR market data subscription. The catalyst column stays manual.
 
 Opened as a local file, there is no connector, so enter values by hand.
