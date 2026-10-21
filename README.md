@@ -326,6 +326,19 @@ The CLI takes the same content as a JSON file: `tradingagents --portfolio my_boo
 
 An empty `positions` list means a flat book, which is different from passing nothing. A run without a portfolio is never treated as flat.
 
+### Claude Agent SDK research agent
+
+`tradingagents/research_agent.py` is a lighter alternative to the full graph. It runs a single [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) agent that chooses its own data calls and writes a research brief ending in a rating. Its tools use the same vendor router as the graph, so your `data_vendors` settings apply to it too, and every dated tool is limited to the analysis date. The agent can't place orders, run shell commands or write files.
+
+```bash
+pip install ".[agent]"
+export ANTHROPIC_API_KEY=...
+python -m tradingagents.research_agent NVDA --date 2026-09-01
+python -m tradingagents.research_agent AAPL --question "Is the services margin sustainable?" --no-web
+```
+
+`--max-turns` and `--max-budget`, in USD, cap each run; the defaults are 40 turns and $2. The model defaults to `claude-opus-5-5`; choose another with `--model`. From Python, call `await research("NVDA", "2026-09-01")`. It returns the SDK's `ResultMessage`, with the brief in `.result` and the run's cost in `.total_cost_usd`.
+
 ## Persistence and Recovery
 
 TradingAgents persists two kinds of state across runs.

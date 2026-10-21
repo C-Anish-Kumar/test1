@@ -39,6 +39,12 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+# The Claude Agent SDK research agent (tradingagents/research_agent.py):
+# pip install "tradingagents[agent]". It drives the Claude Code CLI, which the
+# SDK bundles.
+agent = [
+    "claude-agent-sdk>=0.2.165",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
