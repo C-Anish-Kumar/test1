@@ -12,7 +12,7 @@ from tradingagents.orb.backtest import (
     replay,
     summarize,
 )
-from tradingagents.orb.config import BotSettings
+from tradingagents.orb.config import BotSettings, apply_overrides, settings_from_dict
 from tradingagents.orb.engine import Bar, OrbConfig
 
 NY = ZoneInfo("America/New_York")
@@ -73,3 +73,20 @@ def test_daily_atr_lookup_uses_the_prior_day_only():
 @pytest.mark.unit
 def test_bar_size_uses_ibkrs_spelling():
     assert (bar_size(1), bar_size(15)) == ("1 min", "15 mins")
+
+
+@pytest.mark.unit
+def test_set_overrides_reach_the_right_table_and_parse_values():
+    data = {"bot": {"symbols": ["NVDA"], "bar_minutes": 15}, "orb": {"stop_mode": "opposite"}}
+    s = settings_from_dict(apply_overrides(data, [
+        "stop_mode=mid", "use_rvol=true", "rvol_min=2", "bar_minutes=5",
+        'symbols=["spy", "qqq"]', "time_exit=11:30",
+    ]))
+    assert (s.orb.stop_mode, s.orb.use_rvol, s.orb.rvol_min) == ("mid", True, 2)
+    assert (s.bar_minutes, s.symbols, str(s.orb.time_exit)) == (5, ("SPY", "QQQ"), "11:30:00")
+    assert data["orb"]["stop_mode"] == "opposite"  # the loaded file is not modified
+    assert str(settings_from_dict(apply_overrides(data, ["time_exit=11:30:00"])).orb.time_exit) == "11:30:00"
+    with pytest.raises(ValueError, match="unknown setting"):
+        apply_overrides(data, ["stopmode=mid"])
+    with pytest.raises(ValueError, match="key=value"):
+        apply_overrides(data, ["stop_mode"])

@@ -1,6 +1,7 @@
 """Backtest the ORB bot's rules on IBKR history.
 
     python -m tradingagents.orb.backtest --config orb_bot.toml --months 6
+    python -m tradingagents.orb.backtest --config orb_bot.toml --set stop_mode=mid
 
 Replays IBKR bars (the timeframe in ``bar_minutes``, regular hours only)
 through the same OrbEngine the live bot uses, sizes each trade the way the
@@ -194,13 +195,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--cost-per-share", type=float, default=0.02,
                         help="round-trip commission + slippage per share in $ (default 0.02)")
     parser.add_argument("--out", default="orb_backtest_trades.csv", help="CSV of every trade")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="override a setting for this run, e.g. --set stop_mode=mid"
+                             " (repeatable; any [bot] or [orb] key)")
     args = parser.parse_args(argv)
     try:
         from ib_async import IB, Stock
     except ImportError:
         raise SystemExit('ib_async is not installed: pip install "tradingagents[orb]"') from None
 
-    settings = load_settings(args.config)
+    try:
+        settings = load_settings(args.config, args.set)
+    except ValueError as exc:
+        raise SystemExit(f"Bad --set: {exc}") from None
     tz = ZoneInfo(settings.timezone)
     ib = IB()
     # A separate client id, so a running bot keeps its connection.
@@ -229,6 +236,8 @@ def main(argv: list[str] | None = None) -> None:
     if sessions:
         print(f"Sessions: {len(sessions)} ({min(sessions)} to {max(sessions)}), "
               f"{settings.bar_minutes}m bars, longs only, cost ${args.cost_per_share}/share")
+    if args.set:
+        print("Overrides: " + ", ".join(args.set))
     print(summarize(trades, tz))
     write_csv(trades, args.out)
     print(f"Trades written to {args.out}")

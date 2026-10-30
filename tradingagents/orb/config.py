@@ -55,12 +55,43 @@ def settings_from_dict(data: dict) -> BotSettings:
     _check_keys("bot", bot, {f.name for f in fields(BotSettings)} - {"orb"})
     _check_keys("orb", orb, {f.name for f in fields(OrbConfig)})
     for key in _TIME_FIELDS & orb.keys():
-        orb[key] = None if orb[key] in ("", None) else _parse_time(key, orb[key])
+        value = orb[key]
+        if not isinstance(value, time):  # TOML may already have parsed "11:30:00"
+            orb[key] = None if value in ("", None) else _parse_time(key, value)
     if "symbols" in bot:
         bot["symbols"] = tuple(s.upper() for s in bot["symbols"])
     return BotSettings(**bot, orb=OrbConfig(**orb))
 
 
-def load_settings(path: str | Path) -> BotSettings:
+def apply_overrides(data: dict, overrides: list[str]) -> dict:
+    """Apply ``key=value`` overrides (e.g. ``stop_mode=mid``) to the [bot] / [orb] tables.
+
+    Values are read as TOML (``true``, ``1.5``, ``["SPY", "QQQ"]``); anything
+    that is not valid TOML is taken as a plain string, so ``stop_mode=mid`` and
+    ``time_exit=11:30`` work without quotes.
+    """
+    bot_keys = {f.name for f in fields(BotSettings)} - {"orb"}
+    orb_keys = {f.name for f in fields(OrbConfig)}
+    out = {"bot": dict(data.get("bot", {})), "orb": dict(data.get("orb", {}))}
+    for item in overrides:
+        key, sep, raw = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ValueError(f"--set needs key=value, got {item!r}")
+        try:
+            value = tomllib.loads(f"v = {raw}")["v"]
+        except tomllib.TOMLDecodeError:
+            value = raw.strip()
+        if key in orb_keys:
+            out["orb"][key] = value
+        elif key in bot_keys:
+            out["bot"][key] = value
+        else:
+            raise ValueError(f"unknown setting {key!r}")
+    return out
+
+
+def load_settings(path: str | Path, overrides: list[str] | None = None) -> BotSettings:
     with open(path, "rb") as fh:
-        return settings_from_dict(tomllib.load(fh))
+        data = tomllib.load(fh)
+    return settings_from_dict(apply_overrides(data, overrides) if overrides else data)
