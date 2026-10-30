@@ -76,6 +76,25 @@ prices, so real fills will be somewhat worse. The report ends with a verdict:
 worth paper trading only if average R is at least +0.10R in **both** halves.
 A strategy that only worked in one half is likely fitted to that period.
 
+## Pick tickers that suit the rules
+
+```bash
+python -m tradingagents.orb.screen --config orb_bot.toml --months 12
+```
+
+Backtests 20 liquid US names and ETFs by default; pass `--symbols AAPL,AMD,...` to choose
+your own. The period is split in half by date:
+- **Selection period** (the first half): a ticker is picked only if it had at
+  least 10 trades, an average of +0.10R or better and a profit factor of 1.2 or
+  better.
+- **Test period** (the second half): the picked tickers are scored on data
+  their selection never saw.
+
+The verdict is based on the test period. Choosing tickers by their
+full-period backtest would just pick the ones that happened to do well in the
+past. It takes `--set` like the backtest (e.g. `--set use_rvol=true`), and the
+thresholds can be changed with `--min-trades`, `--min-avg-r` and `--min-pf`.
+
 ## Run
 
 Start it before 09:30 ET on a trading day. It exits on its own after the close.
