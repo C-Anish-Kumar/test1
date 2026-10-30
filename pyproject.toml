@@ -45,6 +45,11 @@ bedrock = [
 agent = [
     "claude-agent-sdk>=0.2.165",
 ]
+# The ORB bot (tradingagents/orb): trades ORB Suite long signals through IB
+# Gateway or TWS. pip install "tradingagents[orb]".
+orb = [
+    "ib_async>=2.1.0",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

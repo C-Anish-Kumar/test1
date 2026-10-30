@@ -1,0 +1,47 @@
+# ORB bot settings. Copy to orb_bot.toml (git-ignored) and edit.
+# Run: python -m tradingagents.orb --config orb_bot.toml
+
+[bot]
+symbols = ["NVDA", "MU"]
+risk_per_trade_usd = 100      # loss if the stop is hit (shares = this / (entry - stop))
+max_position_usd = 20000      # cap on one position's value
+host = "127.0.0.1"
+port = 4002                   # IB Gateway: 4002 paper, 4001 live. TWS: 7497 paper, 7496 live
+client_id = 17
+bar_minutes = 5               # must divide or_minutes
+timezone = "America/New_York"
+kill_file = "STOP_ORB"        # create this file to cancel orders, flatten and stop
+log_file = "orb_bot.log"
+
+# Same meaning and defaults as the ORB Suite indicator's inputs (long side only).
+[orb]
+session_start = "09:30"
+session_end = "16:00"
+or_minutes = 15
+entry_mode = "close_break"    # close_break | break_retest
+buffer = 0.0                  # price units above ORH for a break
+use_vwap = true
+use_ema = false
+ema_len = 50
+use_rvol = false
+rvol_min = 1.5
+rvol_len = 20
+use_width = false             # OR width / prior daily ATR between width_min and width_max
+width_min = 0.10
+width_max = 0.60
+stop_mode = "opposite"        # opposite | mid | atr | pct
+stop_atr_mult = 1.0
+atr_len = 14
+stop_pct = 50.0
+target_mode = "r"             # r (R multiples) | ext (OR extensions)
+tp1 = 1.0
+tp2 = 2.0
+tp3 = 3.0
+min_rr = 1.5
+be_after_tp1 = true
+exit_tp3 = true
+exit_opposite = true
+time_exit = ""                # e.g. "11:30" to stop entries and exit then; "" for none
+eod_close = true
+max_trades = 2
+loss_cap_r = 2.0

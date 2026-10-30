@@ -221,3 +221,8 @@ __marimo__/
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
 reports/
+
+# ORB bot local settings, log and kill switch
+orb_bot.toml
+orb_bot.log
+STOP_ORB
