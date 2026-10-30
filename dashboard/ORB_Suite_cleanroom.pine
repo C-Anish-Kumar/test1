@@ -583,7 +583,11 @@ if showDash and barstate.islast
     else if tradesToday >= maxTrades or lossHit
         statusTxt := "DONE FOR DAY"
     if not na(lastT)
-        entTxt := fmt(lastT.entry) + " · " + fmt(lastT.stop)
+        // The starting stop is one risk unit from entry; once the stop has moved
+        // (breakeven after TP1), show where it started.
+        stop0 = lastT.entry - lastT.dir * lastT.risk0
+        moved = math.abs(lastT.stop - stop0) > syminfo.mintick / 2
+        entTxt := fmt(lastT.entry) + " · " + fmt(lastT.stop) + (moved ? (lastT.stop == lastT.entry ? " BE" : "") + " (from " + fmt(stop0) + ")" : "")
         tpTxt  := fmt(lastT.tp1) + " · " + fmt(lastT.tp2) + " · " + fmt(lastT.tp3)
         rrTxt  := "1 : " + str.tostring(lastT.dir * (lastT.tp2 - lastT.entry) / lastT.risk0, "0.0")
     section(4, 8, "TRADE", color.orange)
