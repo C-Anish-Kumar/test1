@@ -431,23 +431,24 @@ orSideColor = not (inSess and orState == 2) ? na : close > orH ? color.rgb(0, 20
 barcolor(candleMode == "Conviction" ? tierColor(tier) : candleMode == "OR side" ? orSideColor : na, title = "Candle colors")
 
 // ── Plots ──────────────────────────────────────────────────────────────
+// Values stay in the Data Window and on the price scale, not in the status line.
 showOr = inSess and orState > 0 and not newSess
-plot(showOr ? orH : na, "ORH", color.new(color.teal, 0), 2, plot.style_linebr)
-plot(showOr ? orL : na, "ORL", color.new(color.maroon, 0), 2, plot.style_linebr)
-plot(showOr and showMid ? (orH + orL) / 2 : na, "OR mid", color.new(color.gray, 30), 1, plot.style_linebr)
-plot(showVwap and inSess ? vwapV : na, "VWAP", color.new(color.fuchsia, 10), 1, plot.style_linebr)
+plot(showOr ? orH : na, "ORH", color.new(color.teal, 0), 2, plot.style_linebr, display = display.all - display.status_line)
+plot(showOr ? orL : na, "ORL", color.new(color.maroon, 0), 2, plot.style_linebr, display = display.all - display.status_line)
+plot(showOr and showMid ? (orH + orL) / 2 : na, "OR mid", color.new(color.gray, 30), 1, plot.style_linebr, display = display.all - display.status_line)
+plot(showVwap and inSess ? vwapV : na, "VWAP", color.new(color.fuchsia, 10), 1, plot.style_linebr, display = display.all - display.status_line)
 
 showLv = showPrior and inSess and not newSess
-plot(showLv ? pdh : na, "PDH", color.new(color.gray, 40), 1, plot.style_linebr)
-plot(showLv ? pdl : na, "PDL", color.new(color.gray, 40), 1, plot.style_linebr)
-plot(showLv ? pdc : na, "PDC", color.new(color.silver, 50), 1, plot.style_linebr)
-plot(showLv ? pORH : na, "Prior ORH", color.new(color.teal, 70), 1, plot.style_linebr)
-plot(showLv ? pORL : na, "Prior ORL", color.new(color.maroon, 70), 1, plot.style_linebr)
+plot(showLv ? pdh : na, "PDH", color.new(color.gray, 40), 1, plot.style_linebr, display = display.all - display.status_line)
+plot(showLv ? pdl : na, "PDL", color.new(color.gray, 40), 1, plot.style_linebr, display = display.all - display.status_line)
+plot(showLv ? pdc : na, "PDC", color.new(color.silver, 50), 1, plot.style_linebr, display = display.all - display.status_line)
+plot(showLv ? pORH : na, "Prior ORH", color.new(color.teal, 70), 1, plot.style_linebr, display = display.all - display.status_line)
+plot(showLv ? pORL : na, "Prior ORL", color.new(color.maroon, 70), 1, plot.style_linebr, display = display.all - display.status_line)
 
-plotshape(mutedL, "Long below min R:R", shape.triangleup, location.belowbar, color.new(color.gray, 50), size = size.tiny)
-plotshape(mutedS, "Short below min R:R", shape.triangledown, location.abovebar, color.new(color.gray, 50), size = size.tiny)
-plotshape(pendEvtL, "Long break, awaiting retest", shape.diamond, location.belowbar, color.new(color.green, 40), size = size.tiny)
-plotshape(pendEvtS, "Short break, awaiting retest", shape.diamond, location.abovebar, color.new(color.red, 40), size = size.tiny)
+plotshape(mutedL, "Long below min R:R", shape.triangleup, location.belowbar, color.new(color.gray, 50), size = size.tiny, display = display.all - display.status_line)
+plotshape(mutedS, "Short below min R:R", shape.triangledown, location.abovebar, color.new(color.gray, 50), size = size.tiny, display = display.all - display.status_line)
+plotshape(pendEvtL, "Long break, awaiting retest", shape.diamond, location.belowbar, color.new(color.green, 40), size = size.tiny, display = display.all - display.status_line)
+plotshape(pendEvtS, "Short break, awaiting retest", shape.diamond, location.abovebar, color.new(color.red, 40), size = size.tiny, display = display.all - display.status_line)
 plot(score, "Conviction score", display = display.data_window)
 
 // Right-edge labels; levels within a fifth of an ATR share one label ("PDC | ORH").
