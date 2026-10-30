@@ -353,17 +353,22 @@ float lvStop  = na
 float lvTp1   = na
 float lvTp2   = na
 float lvTp3   = na
+bool entryBar = false
 if not na(t)
     lvEntry := t.entry
     lvStop  := t.stop
     lvTp1   := t.tp1
     lvTp2   := t.tp2
     lvTp3   := t.tp3
-plot(showLevels ? lvEntry : na, "Entry", color.new(color.blue, 0), 1, plot.style_linebr)
-plot(showLevels ? lvStop : na, "Stop", color.new(color.red, 0), 2, plot.style_linebr)
-plot(showLevels ? lvTp1 : na, "TP1", color.new(color.green, 40), 1, plot.style_linebr)
-plot(showLevels ? lvTp2 : na, "TP2", color.new(color.green, 20), 1, plot.style_linebr)
-plot(showLevels ? lvTp3 : na, "TP3", color.new(color.green, 0), 1, plot.style_linebr)
+    entryBar := t.bar == bar_index
+// Lines start the bar after entry, so a trade opened on the bar another one
+// closed is not joined to the previous trade's levels by a vertical line.
+drawLv = showLevels and not entryBar
+plot(drawLv ? lvEntry : na, "Entry", color.new(color.blue, 0), 1, plot.style_linebr)
+plot(drawLv ? lvStop : na, "Stop", color.new(color.red, 0), 2, plot.style_linebr)
+plot(drawLv ? lvTp1 : na, "TP1", color.new(color.green, 40), 1, plot.style_linebr)
+plot(drawLv ? lvTp2 : na, "TP2", color.new(color.green, 20), 1, plot.style_linebr)
+plot(drawLv ? lvTp3 : na, "TP3", color.new(color.green, 0), 1, plot.style_linebr)
 
 plotshape(longEvt, "Long entry", shape.triangleup, location.belowbar, color.green, text = "L", textcolor = color.green, size = size.small)
 plotshape(shortEvt, "Short entry", shape.triangledown, location.abovebar, color.red, text = "S", textcolor = color.red, size = size.small)
