@@ -5,10 +5,12 @@
 // OR-width filters. Manages each trade with a stop, three targets, optional
 // breakeven, opposite-break, time and end-of-session exits, and an optional
 // one-shot stop-and-reverse. Colors candles by a weighted conviction score.
+// Draws each trade's levels with event labels, prior-day and prior-OR levels,
+// VWAP, a dashboard and a 5/15/30/60-minute OR ladder.
 // Use a chart timeframe at or below the OR length. Set alerts to
 // "Once per bar close": signals are evaluated on the bar's close.
 //@version=6
-indicator("ORB Suite (clean-room)", shorttitle = "ORB Suite", overlay = true, max_labels_count = 500)
+indicator("ORB Suite (clean-room)", shorttitle = "ORB Suite", overlay = true, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500)
 
 // ── Inputs ─────────────────────────────────────────────────────────────
 // Every input uses display.none so the settings stay out of the status line.
@@ -77,6 +79,13 @@ grpV = "Display"
 showLevels = input.bool(true, "Show trade levels", group = grpV, display = display.none)
 showDash   = input.bool(true, "Show dashboard", group = grpV, display = display.none)
 dashPosIn  = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = grpV, display = display.none)
+showEvents = input.bool(true, "Event labels (ORB, TP1 ✓, SL ×, exits)", group = grpV, display = display.none)
+shadeRR    = input.bool(true, "Shade each trade's risk and reward", group = grpV, display = display.none)
+showVwap   = input.bool(true, "Show VWAP", group = grpV, display = display.none)
+showPrior  = input.bool(true, "Prior-day (PDH/PDL/PDC) and prior-OR levels", group = grpV, display = display.none)
+showEdge   = input.bool(true, "Label levels at the right edge", group = grpV, display = display.none)
+showLadder = input.bool(true, "Show OR ladder (5 / 15 / 30 / 60m)", group = grpV, display = display.none)
+ladPosIn   = input.string("Bottom right", "OR ladder position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = grpV, display = display.none)
 
 // ── Series ─────────────────────────────────────────────────────────────
 buf   = bufTicks * syminfo.mintick
@@ -88,6 +97,7 @@ rsiV  = ta.rsi(close, rsiLen)
 [_, _, macdH] = ta.macd(close, 12, 26, 9)
 // Prior completed day's ATR, so it does not change during the session.
 dAtr = request.security(syminfo.tickerid, "D", ta.atr(dAtrLen)[1], lookahead = barmerge.lookahead_on)
+[pdh, pdl, pdc] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
 
 inSess  = not na(time(timeframe.period, sessIn, tzIn))
 // A new calendar day also starts a session, so RTH-only charts (no bars
@@ -149,6 +159,45 @@ var float dayR = 0.0
 var float lastR = na
 var string lastWhy = ""
 var Trade t = na
+var Trade lastT = na           // the open trade, or the day's last one, for the dashboard
+var float pORH = na            // previous session's opening range
+var float pORL = na
+var box   orBox = na
+
+// Drawings of the open trade: lines [stop, entry, TP1, TP2, TP3] and boxes [risk, reward].
+var array<line> lvLines = array.new<line>()
+var array<box>  lvBoxes = array.new<box>()
+
+evLabel(float y, string txt, color c, string pos) =>
+    if showEvents
+        st = pos == "above" ? label.style_label_down : pos == "below" ? label.style_label_up : label.style_none
+        label.new(bar_index, y, txt, style = st, color = color.new(color.black, 100), textcolor = c, size = size.small)
+
+drawLevels(Trade tr) =>
+    array.clear(lvLines)
+    array.clear(lvBoxes)
+    if showLevels
+        x = bar_index
+        array.push(lvLines, line.new(x, tr.stop, x + 1, tr.stop, color = color.red, width = 2))
+        array.push(lvLines, line.new(x, tr.entry, x + 1, tr.entry, color = color.new(color.blue, 0)))
+        array.push(lvLines, line.new(x, tr.tp1, x + 1, tr.tp1, color = color.new(color.green, 40), style = line.style_dashed))
+        array.push(lvLines, line.new(x, tr.tp2, x + 1, tr.tp2, color = color.new(color.green, 20), style = line.style_dashed))
+        array.push(lvLines, line.new(x, tr.tp3, x + 1, tr.tp3, color = color.new(color.green, 0), style = line.style_dashed))
+        if shadeRR
+            array.push(lvBoxes, box.new(x, math.max(tr.entry, tr.stop), x + 1, math.min(tr.entry, tr.stop), border_color = color.new(color.red, 100), bgcolor = color.new(color.red, 88)))
+            array.push(lvBoxes, box.new(x, math.max(tr.entry, tr.tp2), x + 1, math.min(tr.entry, tr.tp2), border_color = color.new(color.green, 100), bgcolor = color.new(color.green, 90)))
+
+extendLevels() =>
+    for ln in lvLines
+        line.set_x2(ln, bar_index)
+    for bx in lvBoxes
+        box.set_right(bx, bar_index)
+
+// End the stop line here and continue it at the new price (breakeven).
+moveStopLine(float px) =>
+    if array.size(lvLines) > 0
+        line.set_x2(array.get(lvLines, 0), bar_index)
+        array.set(lvLines, 0, line.new(bar_index, px, bar_index, px, color = color.orange, width = 2, style = line.style_dotted))
 
 lockEvt = false
 pendEvtL = false
@@ -172,6 +221,10 @@ if newSess and not na(t)
     t := na
     exitEvt := true
 
+if newSess
+    pORH := orH
+    pORL := orL
+
 // ── Opening range: BUILDING -> LOCKED ──────────────────────────────────
 if newSess
     orH := high
@@ -184,6 +237,10 @@ if newSess
     pendS := false
     tradesToday := 0
     dayR := 0.0
+    lastR := na
+    lastWhy := ""
+    lastT := na
+    orBox := box.new(bar_index, high, bar_index, low, border_color = color.new(color.yellow, 40), bgcolor = color.new(color.yellow, 88))
 else if inSess and orState == 1
     orH := math.max(orH, high)
     orL := math.min(orL, low)
@@ -191,6 +248,15 @@ else if inSess and orState == 1
 if inSess and orState == 1 and time_close >= orEnd
     orState := 2
     lockEvt := true
+
+// The OR box spans the building window; ORH / ORL lines carry on for the day.
+if inSess and not na(orBox) and (orState == 1 or lockEvt)
+    box.set_top(orBox, orH)
+    box.set_bottom(orBox, orL)
+    box.set_right(orBox, bar_index)
+    if lockEvt
+        box.set_bgcolor(orBox, color.new(color.blue, 85))
+        box.set_border_color(orBox, color.new(color.blue, 40))
 
 orRng      = orH - orL
 widthRatio = orRng / dAtr
@@ -211,13 +277,17 @@ if active and not na(t) and bar_index > t.bar
         if not t.tp1Hit and (d == 1 ? high >= t.tp1 : low <= t.tp1)
             t.tp1Hit := true
             tp1Evt := true
+            evLabel(t.tp1, "TP1 ✓", color.green, "mid")
             if beAfterTp1
                 t.stop := t.entry
+                moveStopLine(t.entry)
         if not t.tp2Hit and (d == 1 ? high >= t.tp2 : low <= t.tp2)
             t.tp2Hit := true
             tp2Evt := true
+            evLabel(t.tp2, "TP2 ✓", color.green, "mid")
         if d == 1 ? high >= t.tp3 : low <= t.tp3
             tp3Evt := true
+            evLabel(t.tp3, "TP3 ✓", color.green, "mid")
             if exitTp3
                 exitPx  := t.tp3
                 exitWhy := "TP3"
@@ -232,6 +302,16 @@ if active and not na(t) and bar_index > t.bar
             exitWhy := "Session end"
 
 if not na(exitPx)
+    extendLevels()
+    exitTag = switch exitWhy
+        "Stop"           => "SL ×"
+        "Breakeven"      => "BE"
+        "Opposite break" => "OPP exit"
+        "Time"           => "TIME exit"
+        "Session end"    => "EOD exit"
+        => ""
+    if exitTag != ""
+        evLabel(exitPx, exitTag, exitWhy == "Stop" ? color.red : color.gray, "mid")
     lastR := t.dir * (exitPx - t.entry) / t.risk0
     dayR += lastR
     lastWhy := exitWhy
@@ -248,8 +328,11 @@ if not na(exitPx)
         [rs, rk, r1, r2, r3] = planTrade(revDir, revEntry, orH, orL, revCap)
         if rk > 0 and revDir * (r2 - revEntry) / rk >= minRR
             t := Trade.new(revDir, revEntry, rs, rk, r1, r2, r3, false, false, true, bar_index)
+            lastT := t
             tradesToday += 1
             revEvt := true
+            drawLevels(t)
+            evLabel(revDir == 1 ? low : high, revDir == 1 ? "REV ▲" : "REV ▼", color.orange, revDir == 1 ? "below" : "above")
             if revDir == 1
                 longArmed := false
             else
@@ -300,9 +383,15 @@ if (longTrig or shortTrig) and canEnter
         [s, rk, a, b, c] = planTrade(dir, close, orH, orL, na)
         if rk > 0 and dir * (b - close) / rk >= minRR
             t := Trade.new(dir, close, s, rk, a, b, c, false, false, false, bar_index)
+            lastT := t
             tradesToday += 1
             longEvt := dir == 1
             shortEvt := dir == -1
+            drawLevels(t)
+            evLabel(dir == 1 ? low : high, dir == 1 ? "ORB ▲" : "ORB ▼", dir == 1 ? color.green : color.red, dir == 1 ? "below" : "above")
+
+if not na(t)
+    extendLevels()
         else
             mutedL := dir == 1
             mutedS := dir == -1
@@ -343,83 +432,174 @@ barcolor(candleMode == "Conviction" ? tierColor(tier) : candleMode == "OR side" 
 
 // ── Plots ──────────────────────────────────────────────────────────────
 showOr = inSess and orState > 0 and not newSess
-pH = plot(showOr ? orH : na, "ORH", color.new(color.teal, 0), 2, plot.style_linebr)
-pL = plot(showOr ? orL : na, "ORL", color.new(color.maroon, 0), 2, plot.style_linebr)
+plot(showOr ? orH : na, "ORH", color.new(color.teal, 0), 2, plot.style_linebr)
+plot(showOr ? orL : na, "ORL", color.new(color.maroon, 0), 2, plot.style_linebr)
 plot(showOr and showMid ? (orH + orL) / 2 : na, "OR mid", color.new(color.gray, 30), 1, plot.style_linebr)
-fill(pH, pL, color = orState == 1 ? color.new(color.yellow, 88) : color.new(color.blue, 92), title = "OR box")
+plot(showVwap and inSess ? vwapV : na, "VWAP", color.new(color.fuchsia, 10), 1, plot.style_linebr)
 
-// Copy the levels out first so no field is read from an na trade.
-float lvEntry = na
-float lvStop  = na
-float lvTp1   = na
-float lvTp2   = na
-float lvTp3   = na
-bool entryBar = false
-if not na(t)
-    lvEntry := t.entry
-    lvStop  := t.stop
-    lvTp1   := t.tp1
-    lvTp2   := t.tp2
-    lvTp3   := t.tp3
-    entryBar := t.bar == bar_index
-// Lines start the bar after entry, so a trade opened on the bar another one
-// closed is not joined to the previous trade's levels by a vertical line.
-drawLv = showLevels and not entryBar
-plot(drawLv ? lvEntry : na, "Entry", color.new(color.blue, 0), 1, plot.style_linebr)
-plot(drawLv ? lvStop : na, "Stop", color.new(color.red, 0), 2, plot.style_linebr)
-plot(drawLv ? lvTp1 : na, "TP1", color.new(color.green, 40), 1, plot.style_linebr)
-plot(drawLv ? lvTp2 : na, "TP2", color.new(color.green, 20), 1, plot.style_linebr)
-plot(drawLv ? lvTp3 : na, "TP3", color.new(color.green, 0), 1, plot.style_linebr)
+showLv = showPrior and inSess and not newSess
+plot(showLv ? pdh : na, "PDH", color.new(color.gray, 40), 1, plot.style_linebr)
+plot(showLv ? pdl : na, "PDL", color.new(color.gray, 40), 1, plot.style_linebr)
+plot(showLv ? pdc : na, "PDC", color.new(color.silver, 50), 1, plot.style_linebr)
+plot(showLv ? pORH : na, "Prior ORH", color.new(color.teal, 70), 1, plot.style_linebr)
+plot(showLv ? pORL : na, "Prior ORL", color.new(color.maroon, 70), 1, plot.style_linebr)
 
-plotshape(longEvt, "Long entry", shape.triangleup, location.belowbar, color.green, text = "L", textcolor = color.green, size = size.small)
-plotshape(shortEvt, "Short entry", shape.triangledown, location.abovebar, color.red, text = "S", textcolor = color.red, size = size.small)
 plotshape(mutedL, "Long below min R:R", shape.triangleup, location.belowbar, color.new(color.gray, 50), size = size.tiny)
 plotshape(mutedS, "Short below min R:R", shape.triangledown, location.abovebar, color.new(color.gray, 50), size = size.tiny)
 plotshape(pendEvtL, "Long break, awaiting retest", shape.diamond, location.belowbar, color.new(color.green, 40), size = size.tiny)
 plotshape(pendEvtS, "Short break, awaiting retest", shape.diamond, location.abovebar, color.new(color.red, 40), size = size.tiny)
-plotshape(revEvt, "Stop-and-reverse", shape.flag, location.abovebar, color.orange, text = "SAR", textcolor = color.orange, size = size.small)
-plotshape(stopEvt, "Stop hit", shape.xcross, location.abovebar, color.red, size = size.tiny)
-plotchar(tp1Evt, "TP1 hit", "1", location.abovebar, color.green, size = size.tiny)
-plotchar(tp2Evt, "TP2 hit", "2", location.abovebar, color.green, size = size.tiny)
-plotchar(tp3Evt, "TP3 hit", "3", location.abovebar, color.green, size = size.tiny)
-plotshape(exitEvt, "Exit", shape.square, location.abovebar, color.new(color.blue, 30), size = size.tiny)
 plot(score, "Conviction score", display = display.data_window)
 
-// ── Dashboard ──────────────────────────────────────────────────────────
-dashPos = switch dashPosIn
-    "Top left"     => position.top_left
-    "Bottom right" => position.bottom_right
-    "Bottom left"  => position.bottom_left
-    => position.top_right
-var table dash = table.new(dashPos, 2, 13, bgcolor = color.new(chart.bg_color, 10), border_width = 1, border_color = color.new(chart.fg_color, 80))
+// Right-edge labels; levels within a fifth of an ATR share one label ("PDC | ORH").
+var array<label> edgeLbls = array.new<label>()
+if barstate.islast
+    for lb in edgeLbls
+        label.delete(lb)
+    array.clear(edgeLbls)
+    if showEdge
+        names = array.from("PDH", "PDL", "PDC", "pORH", "pORL", "ORH", "ORL", "VWAP")
+        vals  = array.from(pdh, pdl, pdc, pORH, pORL, orH, orL, vwapV)
+        keep  = array.from(showPrior, showPrior, showPrior, showPrior, showPrior, orState > 0, orState > 0, showVwap)
+        tol   = nz(atrV, syminfo.mintick) * 0.2
+        txts  = array.new<string>()
+        pxs   = array.new<float>()
+        for [i, v] in vals
+            if na(v) or not array.get(keep, i)
+                continue
+            found = -1
+            for [j, p] in pxs
+                if math.abs(p - v) <= tol
+                    found := j
+                    break
+            if found >= 0
+                array.set(txts, found, array.get(txts, found) + " | " + array.get(names, i))
+            else
+                array.push(txts, array.get(names, i))
+                array.push(pxs, v)
+        for [k, p] in pxs
+            array.push(edgeLbls, label.new(bar_index + 2, p, array.get(txts, k) + "  " + str.tostring(p, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(chart.fg_color, 20), size = size.small))
+
+// ── OR ladder: the 5 / 15 / 30 / 60-minute ranges from chart bars ──────
+var array<float> ladH = array.new<float>(4, na)
+var array<float> ladL = array.new<float>(4, na)
+var array<int>   ladS = array.new<int>(4, 0)    // 0 none, 1 building, 2 locked
+var int sessStartT = na
+ladLens = array.from(5, 15, 30, 60)
+if newSess
+    sessStartT := time
+if inSess and not na(sessStartT)
+    for [i, len] in ladLens
+        endT = sessStartT + len * 60000
+        if newSess
+            array.set(ladH, i, high)
+            array.set(ladL, i, low)
+            array.set(ladS, i, 1)
+        else if time < endT
+            array.set(ladH, i, math.max(array.get(ladH, i), high))
+            array.set(ladL, i, math.min(array.get(ladL, i), low))
+        if array.get(ladS, i) == 1 and time_close >= endT
+            array.set(ladS, i, 2)
+
+// ── Tables ─────────────────────────────────────────────────────────────
+posOf(string s) =>
+    switch s
+        "Top left"     => position.top_left
+        "Bottom right" => position.bottom_right
+        "Bottom left"  => position.bottom_left
+        => position.top_right
+var table dash = table.new(posOf(dashPosIn), 3, 11, bgcolor = color.new(chart.bg_color, 8), border_width = 1, border_color = color.new(chart.fg_color, 85))
+var table lad  = table.new(posOf(ladPosIn), 5, 5, bgcolor = color.new(chart.bg_color, 8), border_width = 1, border_color = color.new(chart.fg_color, 85))
 
 fmt(float v) => na(v) ? "—" : str.tostring(v, format.mintick)
-mark(bool ok) => ok ? "✓" : "✗"
-row(int r, string k, string v, color c) =>
-    table.cell(dash, 0, r, k, text_color = chart.fg_color, text_size = size.small, text_halign = text.align_left)
-    table.cell(dash, 1, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+fmtR(float r) => str.tostring(r, "+0.00;-0.00") + "R"
+cellK(int r, string k) =>
+    table.cell(dash, 1, r, k, text_color = chart.fg_color, text_size = size.small, text_halign = text.align_left)
+cellV(int r, string v, color c) =>
+    table.cell(dash, 2, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+// Tags the first row of a section and tints the rest (no cell merging, which
+// would fail when the table is redrawn on the next realtime update).
+section(int r0, int r1, string tag, color c) =>
+    for r = r0 to r1
+        table.cell(dash, 0, r, r == r0 ? tag : "", text_color = color.white, bgcolor = color.new(c, r == r0 ? 40 : 80), text_size = size.tiny)
 
 if showDash and barstate.islast
-    fg = chart.fg_color
-    stateTxt = not inSess ? "Out of session" : orState == 1 ? "BUILDING" : orState == 2 ? "LOCKED" : "—"
-    row(0, "ORB Suite", str.tostring(orMin) + "m OR", fg)
-    row(1, "OR state", stateTxt, orState == 2 ? color.teal : color.orange)
-    row(2, "ORH / ORL", fmt(orH) + " / " + fmt(orL), fg)
-    row(3, "Width / D-ATR", na(widthRatio) ? "—" : str.tostring(widthRatio, "#.00") + (useWidth ? " " + mark(widthOk) : ""), useWidth and not widthOk ? color.red : fg)
-    row(4, "VWAP / EMA", (close > vwapV ? "▲" : "▼") + " / " + (close > emaV ? "▲" : "▼"), fg)
-    row(5, "RVOL", str.tostring(rvol, "#.0") + "x" + (useRvol ? " " + mark(rvol >= rvolMin) : ""), fg)
-    posTxt = "Flat"
-    posCol = fg
+    fg   = chart.fg_color
+    up   = color.rgb(0, 200, 83)
+    dn   = color.rgb(239, 83, 80)
+    stateTxt = not inSess ? "CLOSED" : orState == 1 ? "BUILDING" : orState == 2 ? "LOCKED" : "—"
+    stateCol = orState == 2 and inSess ? up : orState == 1 ? color.orange : color.gray
+    table.cell(dash, 0, 0, "◆", text_color = fg, text_size = size.small)
+    table.cell(dash, 1, 0, "OPENING RANGE", text_color = fg, text_size = size.normal, text_halign = text.align_left)
+    table.cell(dash, 2, 0, stateTxt, text_color = color.black, bgcolor = stateCol, text_size = size.normal)
+
+    widthCls = na(widthRatio) ? "—" : widthRatio < widthMin ? "NARROW" : widthRatio > widthMax ? "WIDE" : "NORMAL"
+    section(1, 3, "OR", color.blue)
+    cellK(1, "OR " + str.tostring(orMin) + "m · H / L")
+    cellV(1, fmt(orH) + " / " + fmt(orL), color.aqua)
+    cellK(2, "Width")
+    cellV(2, widthCls + (na(widthRatio) ? "" : " · " + str.tostring(widthRatio, "0.00") + "×"), useWidth and not widthOk ? dn : up)
+    cellK(3, "Filters")
+    cellV(3, "VWAP " + (close > vwapV ? "▲" : "▼") + " · EMA " + (close > emaV ? "▲" : "▼") + " · RVOL " + str.tostring(rvol, "0.0") + "×", fg)
+
+    statusTxt = orState == 1 ? "BUILDING OR" : "WAITING"
+    statusCol = color.gray
+    entTxt = "—"
+    tpTxt  = "—"
+    rrTxt  = "—"
     if not na(t)
-        posTxt := (t.dir == 1 ? "LONG" : "SHORT") + (t.rev ? " (SAR)" : "") + " @ " + fmt(t.entry)
-        posCol := t.dir == 1 ? color.green : color.red
-    row(6, "Position", posTxt, posCol)
-    row(7, "Stop", fmt(lvStop), color.red)
-    row(8, "TP1 / TP2 / TP3", na(t) ? "—" : fmt(lvTp1) + " / " + fmt(lvTp2) + " / " + fmt(lvTp3), color.green)
-    row(9, "Trades today", str.tostring(tradesToday) + " / " + str.tostring(maxTrades), tradesToday >= maxTrades ? color.orange : fg)
-    row(10, "Day R", str.tostring(dayR, "+#.00;-#.00") + "R" + (lossHit ? " (cap hit)" : "") + (na(lastR) ? "" : "  last " + str.tostring(lastR, "+#.00;-#.00") + "R " + lastWhy), dayR >= 0 ? color.green : color.red)
-    row(11, "Conviction", tierName(tier) + " " + str.tostring(score, "+#.00;-#.00"), tierColor(tier))
-    row(12, "Timeframe", tfBad ? "Chart TF > OR length" : "OK", tfBad ? color.red : fg)
+        statusTxt := (t.dir == 1 ? "LONG" : "SHORT") + (t.tp1Hit ? " · TP1 ✓" : "") + " · " + fmtR(t.dir * (close - t.entry) / t.risk0)
+        statusCol := t.dir == 1 ? up : dn
+    else if not na(lastR)
+        tag = switch lastWhy
+            "Stop"           => "STOP"
+            "Breakeven"      => "BE"
+            "Opposite break" => "OPP"
+            "Time"           => "TIME"
+            "Session end"    => "EOD"
+            => str.upper(lastWhy)
+        statusTxt := tag + " " + fmtR(lastR)
+        statusCol := lastR >= 0 ? up : dn
+    else if tradesToday >= maxTrades or lossHit
+        statusTxt := "DONE FOR DAY"
+    if not na(lastT)
+        entTxt := fmt(lastT.entry) + " · " + fmt(lastT.stop)
+        tpTxt  := fmt(lastT.tp1) + " · " + fmt(lastT.tp2) + " · " + fmt(lastT.tp3)
+        rrTxt  := "1 : " + str.tostring(lastT.dir * (lastT.tp2 - lastT.entry) / lastT.risk0, "0.0")
+    section(4, 8, "TRADE", color.orange)
+    cellK(4, "Status")
+    cellV(4, statusTxt, statusCol)
+    cellK(5, "Entry · Stop")
+    cellV(5, entTxt, color.aqua)
+    cellK(6, "TP1 · TP2 · TP3")
+    cellV(6, tpTxt, up)
+    cellK(7, "R:R to TP2")
+    cellV(7, rrTxt, fg)
+    cellK(8, "Today")
+    cellV(8, str.tostring(tradesToday) + "/" + str.tostring(maxTrades) + " trades · " + fmtR(dayR) + (lossHit ? " · cap hit" : ""), dayR >= 0 ? fg : dn)
+
+    section(9, 10, "READ", color.green)
+    cellK(9, "Conviction")
+    cellV(9, str.upper(tierName(tier)) + " " + str.tostring(score, "+0.00;-0.00"), tierColor(tier))
+    cellK(10, "Timeframe")
+    cellV(10, tfBad ? "Chart TF > OR length" : "OK", tfBad ? dn : fg)
+
+if showLadder and barstate.islast
+    fg = chart.fg_color
+    hdr = array.from("OR", "High", "Low", "Mid", "State")
+    for [c, h] in hdr
+        table.cell(lad, c, 0, h, text_color = color.gray, text_size = size.small)
+    for [i, len] in ladLens
+        r = i + 1
+        ok = timeframe.in_seconds() <= len * 60
+        hi = array.get(ladH, i)
+        lo = array.get(ladL, i)
+        st = array.get(ladS, i)
+        sel = len == orMin
+        table.cell(lad, 0, r, str.tostring(len) + "m", text_color = sel ? color.black : fg, bgcolor = sel ? color.aqua : na, text_size = size.small)
+        table.cell(lad, 1, r, ok ? fmt(hi) : "n/a", text_color = color.rgb(0, 200, 83), text_size = size.small)
+        table.cell(lad, 2, r, ok ? fmt(lo) : "n/a", text_color = color.rgb(239, 83, 80), text_size = size.small)
+        table.cell(lad, 3, r, ok ? fmt((hi + lo) / 2) : "n/a", text_color = fg, text_size = size.small)
+        table.cell(lad, 4, r, not ok ? "TF too high" : st == 2 ? "LOCKED" : st == 1 ? "BUILDING" : "—", text_color = st == 2 ? color.rgb(0, 200, 83) : color.orange, text_size = size.small)
 
 // ── Alerts ─────────────────────────────────────────────────────────────
 alertcondition(lockEvt, "OR locked", "{{ticker}} opening range locked")
