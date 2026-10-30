@@ -480,24 +480,44 @@ if barstate.islast
         for [k, p] in pxs
             array.push(edgeLbls, label.new(bar_index + 2, p, array.get(txts, k) + "  " + str.tostring(p, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(chart.fg_color, 20), size = size.small))
 
-// ── OR ladder: the 5 / 15 / 30 / 60-minute ranges from chart bars ──────
+// ── OR ladder: the 5 / 15 / 30 / 60-minute ranges ─────────────────────
+// Built from 1-minute intrabars, so every row fills in on a chart above the
+// row's length (e.g. the 5m row on a 15m chart). Where 1-minute history is
+// not available (it is shorter than chart history), chart bars are used and
+// rows shorter than the chart timeframe show n/a.
+ladTf = timeframe.in_seconds() <= 60 ? timeframe.period : "1"
+[ltT, ltH, ltL] = request.security_lower_tf(syminfo.tickerid, ladTf, [time, high, low])
+
 var array<float> ladH = array.new<float>(4, na)
 var array<float> ladL = array.new<float>(4, na)
 var array<int>   ladS = array.new<int>(4, 0)    // 0 none, 1 building, 2 locked
-var int sessStartT = na
+var int  sessStartT = na
+var bool ladIntra = false                       // this session's ladder came from intrabars
 ladLens = array.from(5, 15, 30, 60)
+
+// Widen row i's range with one bar's high and low.
+ladTake(int i, float h, float l) =>
+    cur = array.get(ladH, i)
+    array.set(ladH, i, na(cur) ? h : math.max(cur, h))
+    curL = array.get(ladL, i)
+    array.set(ladL, i, na(curL) ? l : math.min(curL, l))
+
 if newSess
     sessStartT := time
+    ladIntra := array.size(ltT) > 0
 if inSess and not na(sessStartT)
     for [i, len] in ladLens
         endT = sessStartT + len * 60000
         if newSess
-            array.set(ladH, i, high)
-            array.set(ladL, i, low)
+            array.set(ladH, i, na)
+            array.set(ladL, i, na)
             array.set(ladS, i, 1)
+        if ladIntra
+            for [k, tt] in ltT
+                if tt >= sessStartT and tt < endT
+                    ladTake(i, array.get(ltH, k), array.get(ltL, k))
         else if time < endT
-            array.set(ladH, i, math.max(array.get(ladH, i), high))
-            array.set(ladL, i, math.min(array.get(ladL, i), low))
+            ladTake(i, high, low)
         if array.get(ladS, i) == 1 and time_close >= endT
             array.set(ladS, i, 2)
 
@@ -591,7 +611,7 @@ if showLadder and barstate.islast
         table.cell(lad, c, 0, h, text_color = color.gray, text_size = size.small)
     for [i, len] in ladLens
         r = i + 1
-        ok = timeframe.in_seconds() <= len * 60
+        ok = ladIntra or timeframe.in_seconds() <= len * 60
         hi = array.get(ladH, i)
         lo = array.get(ladL, i)
         st = array.get(ladS, i)
