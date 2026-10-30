@@ -2,9 +2,10 @@
 
 Trades the **long** signals of the ORB Suite TradingView indicator
 (`dashboard/ORB_Suite_cleanroom.pine`) on an Interactive Brokers account. The
-bot does not read TradingView. It runs the same rules itself on IBKR's 5-minute
-bars, so it works with a free TradingView plan and keeps trading when the chart
-is closed.
+bot does not read TradingView. It runs the same rules itself on IBKR's bars
+(15-minute in the example settings; set `bar_minutes` to the timeframe of the
+chart you compare it with, since signals fire on bar closes), so it works with
+a free TradingView plan and keeps trading when the chart is closed.
 
 > **Paper first.** The bot connects to your paper (simulated money) account
 > unless you pass `--live`, and it refuses to start on a live account without
@@ -16,7 +17,7 @@ is closed.
 Each trading day, for each symbol in your settings:
 
 1. Builds the opening range from the first `or_minutes` (15 by default) and locks it.
-2. When a 5-minute bar **closes** above the range high (or retests it, in
+2. When a bar **closes** above the range high (or retests it, in
    `break_retest` mode) and the filters pass, it buys with a **bracket order**.
    A bracket is three orders sent together: a market buy, a resting **stop**
    (a sell that triggers if price falls to the stop) and a resting **limit**
