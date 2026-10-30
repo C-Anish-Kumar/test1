@@ -389,12 +389,12 @@ if (longTrig or shortTrig) and canEnter
             shortEvt := dir == -1
             drawLevels(t)
             evLabel(dir == 1 ? low : high, dir == 1 ? "ORB ▲" : "ORB ▼", dir == 1 ? color.green : color.red, dir == 1 ? "below" : "above")
-
-if not na(t)
-    extendLevels()
         else
             mutedL := dir == 1
             mutedS := dir == -1
+
+if not na(t)
+    extendLevels()
 
 // ── Conviction score (seven tiers) ─────────────────────────────────────
 sEma  = close > emaV ? 1 : close < emaV ? -1 : 0
