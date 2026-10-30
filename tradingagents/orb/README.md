@@ -54,6 +54,28 @@ Shorts and stop-and-reverse are not traded.
    The `[orb]` section uses the indicator's input names and defaults. Change
    both together if you want the chart and the bot to agree.
 
+## Backtest first
+
+Before paper trading, replay months of IBKR history through the bot's exact
+rules and settings:
+
+```bash
+python -m tradingagents.orb.backtest --config orb_bot.toml --months 6
+```
+
+It needs IB Gateway or TWS running, but only reads data. It connects
+read-only with its own client id, so it can run next to the bot. It prints
+trades, win rate, average R, median R and profit factor. It also shows each
+half of the period and breaks results down by exit reason, entry hour and
+symbol, then writes every trade to `orb_backtest_trades.csv`. Results are
+after `--cost-per-share` (default $0.02 round trip, for commission and
+slippage) and use the bot's sizing.
+
+Entries are modelled at the signal bar's close and stops and targets at their
+prices, so real fills will be somewhat worse. The report ends with a verdict:
+worth paper trading only if average R is at least +0.10R in **both** halves.
+A strategy that only worked in one half is likely fitted to that period.
+
 ## Run
 
 Start it before 09:30 ET on a trading day. It exits on its own after the close.
