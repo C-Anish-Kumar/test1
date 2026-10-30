@@ -89,7 +89,10 @@ rsiV  = ta.rsi(close, rsiLen)
 dAtr = request.security(syminfo.tickerid, "D", ta.atr(dAtrLen)[1], lookahead = barmerge.lookahead_on)
 
 inSess  = not na(time(timeframe.period, sessIn, tzIn))
-newSess = inSess and not inSess[1]
+// A new calendar day also starts a session, so RTH-only charts (no bars
+// between sessions) still reset the OR every day.
+dayKey  = year(time, tzIn) * 10000 + month(time, tzIn) * 100 + dayofmonth(time, tzIn)
+newSess = inSess and (not inSess[1] or dayKey != dayKey[1])
 
 hhmmToMin(s) => int(str.tonumber(str.substring(s, 0, 2))) * 60 + int(str.tonumber(str.substring(s, 2, 4)))
 sessEndMin = hhmmToMin(str.substring(sessIn, 5, 9))
