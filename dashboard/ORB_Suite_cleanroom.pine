@@ -1,0 +1,426 @@
+// ORB Suite (clean-room): opening-range breakout indicator written from the
+// public description of an ORB tool, not from its (closed) source.
+// Builds the opening range for a custom session, locks it, and fires
+// close-break or break + retest entries that pass the VWAP / EMA / RVOL /
+// OR-width filters. Manages each trade with a stop, three targets, optional
+// breakeven, opposite-break, time and end-of-session exits, and an optional
+// one-shot stop-and-reverse. Colors candles by a weighted conviction score.
+// Use a chart timeframe at or below the OR length. Set alerts to
+// "Once per bar close": signals are evaluated on the bar's close.
+//@version=6
+indicator("ORB Suite (clean-room)", shorttitle = "ORB Suite", overlay = true, max_labels_count = 500)
+
+// ── Inputs ─────────────────────────────────────────────────────────────
+grpOR = "Opening range"
+sessIn  = input.session("0930-1600", "Session", group = grpOR)
+tzIn    = input.string("America/New_York", "Timezone", group = grpOR)
+orMin   = input.int(15, "OR length (min)", options = [5, 15, 30, 60], group = grpOR)
+showMid = input.bool(true, "Show OR midpoint", group = grpOR)
+
+grpEn = "Entries"
+entryMode = input.string("Close break", "Entry mode", options = ["Close break", "Break + retest"], group = grpEn)
+bufTicks  = input.int(0, "Break buffer (ticks)", minval = 0, group = grpEn)
+dirMode   = input.string("Both", "Direction", options = ["Both", "Long only", "Short only"], group = grpEn)
+
+grpF = "Filters"
+useVwap  = input.bool(true, "Close on the VWAP side of the trade", group = grpF)
+useEma   = input.bool(false, "Close on the EMA side, length", inline = "ema", group = grpF)
+emaLen   = input.int(50, "", minval = 1, inline = "ema", group = grpF)
+useRvol  = input.bool(false, "RVOL at least", inline = "rv", group = grpF)
+rvolMin  = input.float(1.5, "", step = 0.1, inline = "rv", group = grpF)
+rvolLen  = input.int(20, "RVOL length", minval = 1, group = grpF)
+useWidth = input.bool(false, "OR width / daily ATR between", inline = "w", group = grpF)
+widthMin = input.float(0.10, "", step = 0.05, inline = "w", group = grpF)
+widthMax = input.float(0.60, "", step = 0.05, inline = "w", group = grpF)
+dAtrLen  = input.int(14, "Daily ATR length", minval = 1, group = grpF)
+
+grpR = "Stops & targets"
+stopMode = input.string("Opposite OR side", "Stop", options = ["Opposite OR side", "OR midpoint", "ATR multiple", "% of OR"], group = grpR)
+stopAtrM = input.float(1.0, "ATR multiple", step = 0.1, group = grpR)
+atrLen   = input.int(14, "Chart ATR length", minval = 1, group = grpR)
+stopPct  = input.float(50, "% of OR", step = 5, group = grpR)
+tpMode   = input.string("R multiples", "Targets", options = ["R multiples", "OR extensions"], group = grpR)
+tp1In    = input.float(1.0, "TP1", step = 0.25, inline = "tp", group = grpR)
+tp2In    = input.float(2.0, "TP2", step = 0.25, inline = "tp", group = grpR)
+tp3In    = input.float(3.0, "TP3", step = 0.25, inline = "tp", group = grpR)
+minRR    = input.float(1.5, "Min R:R to TP2", step = 0.1, group = grpR)
+
+grpX = "Exits"
+beAfterTp1  = input.bool(true, "Move stop to breakeven after TP1", group = grpX)
+exitTp3     = input.bool(true, "Exit at TP3", group = grpX)
+exitOpp     = input.bool(true, "Exit on an opposite OR break", group = grpX)
+useTimeExit = input.bool(false, "Time exit (also stops new entries) at", inline = "te", group = grpX)
+teH         = input.int(11, "", minval = 0, maxval = 23, inline = "te", group = grpX)
+teM         = input.int(30, ":", minval = 0, maxval = 59, inline = "te", group = grpX)
+eodClose    = input.bool(true, "Close at session end", group = grpX)
+useSar      = input.bool(false, "Stop-and-reverse (risk capped at the original 1R)", group = grpX)
+
+grpD = "Daily limits"
+maxTrades  = input.int(2, "Max trades per day", minval = 1, group = grpD)
+useLossCap = input.bool(true, "Daily loss cap (R)", inline = "dl", group = grpD)
+lossCapR   = input.float(2.0, "", step = 0.5, inline = "dl", group = grpD)
+
+grpC = "Candles"
+candleMode = input.string("Conviction", "Candle colors", options = ["Off", "Conviction", "OR side"], group = grpC)
+wEma   = input.float(1.0, "Weight: EMA side", minval = 0, step = 0.5, group = grpC)
+wVwap  = input.float(1.0, "Weight: VWAP side", minval = 0, step = 0.5, group = grpC)
+wRsi   = input.float(1.0, "Weight: RSI vs 50", minval = 0, step = 0.5, inline = "rsi", group = grpC)
+rsiLen = input.int(14, "len", minval = 1, inline = "rsi", group = grpC)
+wMacd  = input.float(1.0, "Weight: MACD histogram", minval = 0, step = 0.5, group = grpC)
+wRvol  = input.float(1.0, "Weight: RVOL candle", minval = 0, step = 0.5, group = grpC)
+wOr    = input.float(1.5, "Weight: position vs OR", minval = 0, step = 0.5, group = grpC)
+wMom   = input.float(1.0, "Weight: momentum", minval = 0, step = 0.5, inline = "mom", group = grpC)
+momLen = input.int(10, "bars", minval = 1, inline = "mom", group = grpC)
+
+grpV = "Display"
+showLevels = input.bool(true, "Show trade levels", group = grpV)
+showDash   = input.bool(true, "Show dashboard", group = grpV)
+dashPosIn  = input.string("Top right", "Dashboard position", options = ["Top right", "Top left", "Bottom right", "Bottom left"], group = grpV)
+
+// ── Series ─────────────────────────────────────────────────────────────
+buf   = bufTicks * syminfo.mintick
+vwapV = ta.vwap(hlc3)
+emaV  = ta.ema(close, emaLen)
+atrV  = ta.atr(atrLen)
+rvol  = volume / ta.sma(volume, rvolLen)
+rsiV  = ta.rsi(close, rsiLen)
+[_, _, macdH] = ta.macd(close, 12, 26, 9)
+// Prior completed day's ATR, so it does not change during the session.
+dAtr = request.security(syminfo.tickerid, "D", ta.atr(dAtrLen)[1], lookahead = barmerge.lookahead_on)
+
+inSess  = not na(time(timeframe.period, sessIn, tzIn))
+newSess = inSess and not inSess[1]
+
+hhmmToMin(s) => int(str.tonumber(str.substring(s, 0, 2))) * 60 + int(str.tonumber(str.substring(s, 2, 4)))
+sessEndMin = hhmmToMin(str.substring(sessIn, 5, 9))
+closeMin   = hour(time_close, tzIn) * 60 + minute(time_close, tzIn)
+eodBar     = inSess and closeMin >= sessEndMin
+pastCutoff = inSess and useTimeExit and closeMin >= teH * 60 + teM
+
+tfBad = not timeframe.isintraday or timeframe.in_seconds() > orMin * 60
+
+// ── Trade state ────────────────────────────────────────────────────────
+type Trade
+    int   dir
+    float entry
+    float stop
+    float risk0
+    float tp1
+    float tp2
+    float tp3
+    bool  tp1Hit = false
+    bool  tp2Hit = false
+    bool  rev    = false
+    int   bar
+
+// Stop and targets for a trade in `dir` from `entry`. A non-na `cap` limits
+// the risk to that distance (used by stop-and-reverse).
+planTrade(int dir, float entry, float hi, float lo, float cap) =>
+    rng  = hi - lo
+    stop = switch stopMode
+        "Opposite OR side" => dir == 1 ? lo : hi
+        "OR midpoint"      => (hi + lo) / 2
+        "ATR multiple"     => entry - dir * stopAtrM * atrV
+        =>                    entry - dir * stopPct / 100 * rng
+    risk = dir * (entry - stop)
+    if not na(cap) and (risk > cap or risk <= 0)
+        risk := cap
+        stop := entry - dir * cap
+    base = dir == 1 ? hi : lo
+    t1 = tpMode == "R multiples" ? entry + dir * tp1In * risk : base + dir * tp1In * rng
+    t2 = tpMode == "R multiples" ? entry + dir * tp2In * risk : base + dir * tp2In * rng
+    t3 = tpMode == "R multiples" ? entry + dir * tp3In * risk : base + dir * tp3In * rng
+    [stop, risk, t1, t2, t3]
+
+var float orH = na
+var float orL = na
+var int   orState = 0          // 0 none, 1 building, 2 locked
+var int   orEnd = na
+var bool  longArmed = true
+var bool  shortArmed = true
+var bool  pendL = false
+var bool  pendS = false
+var int   tradesToday = 0
+var float dayR = 0.0
+var float lastR = na
+var string lastWhy = ""
+var Trade t = na
+
+lockEvt = false
+pendEvtL = false
+pendEvtS = false
+longEvt = false
+shortEvt = false
+mutedL = false
+mutedS = false
+tp1Evt = false
+tp2Evt = false
+tp3Evt = false
+stopEvt = false
+revEvt = false
+exitEvt = false
+
+// A position left open from the previous session closes at this open.
+if newSess and not na(t)
+    lastR := t.dir * (open - t.entry) / t.risk0
+    dayR += lastR
+    lastWhy := "Carry-over"
+    t := na
+    exitEvt := true
+
+// ── Opening range: BUILDING -> LOCKED ──────────────────────────────────
+if newSess
+    orH := high
+    orL := low
+    orState := 1
+    orEnd := time + orMin * 60000
+    longArmed := true
+    shortArmed := true
+    pendL := false
+    pendS := false
+    tradesToday := 0
+    dayR := 0.0
+else if inSess and orState == 1
+    orH := math.max(orH, high)
+    orL := math.min(orL, low)
+
+if inSess and orState == 1 and time_close >= orEnd
+    orState := 2
+    lockEvt := true
+
+orRng      = orH - orL
+widthRatio = orRng / dAtr
+widthOk    = not useWidth or (widthRatio >= widthMin and widthRatio <= widthMax)
+active     = inSess and orState == 2 and not lockEvt
+lossHit    = useLossCap and dayR <= -lossCapR
+
+// ── Manage the open trade (from the bar after entry; stop before targets) ──
+exitPx  = float(na)
+exitWhy = ""
+if active and not na(t) and bar_index > t.bar
+    d = t.dir
+    if d == 1 ? low <= t.stop : high >= t.stop
+        exitPx  := t.stop
+        exitWhy := t.tp1Hit and beAfterTp1 ? "Breakeven" : "Stop"
+        stopEvt := true
+    else
+        if not t.tp1Hit and (d == 1 ? high >= t.tp1 : low <= t.tp1)
+            t.tp1Hit := true
+            tp1Evt := true
+            if beAfterTp1
+                t.stop := t.entry
+        if not t.tp2Hit and (d == 1 ? high >= t.tp2 : low <= t.tp2)
+            t.tp2Hit := true
+            tp2Evt := true
+        if d == 1 ? high >= t.tp3 : low <= t.tp3
+            tp3Evt := true
+            if exitTp3
+                exitPx  := t.tp3
+                exitWhy := "TP3"
+        if na(exitPx) and exitOpp and (d == 1 ? close < orL - buf : close > orH + buf)
+            exitPx  := close
+            exitWhy := "Opposite break"
+        if na(exitPx) and pastCutoff
+            exitPx  := close
+            exitWhy := "Time"
+        if na(exitPx) and eodClose and eodBar
+            exitPx  := close
+            exitWhy := "Session end"
+
+if not na(exitPx)
+    lastR := t.dir * (exitPx - t.entry) / t.risk0
+    dayR += lastR
+    lastWhy := exitWhy
+    revDir   = -t.dir
+    revEntry = t.stop
+    revCap   = t.risk0
+    wasStop  = exitWhy == "Stop" and not t.rev
+    t := na
+    exitEvt := not stopEvt
+    lossHit := useLossCap and dayR <= -lossCapR
+    // Stop-and-reverse: the opposite side opens at the stop price. It counts
+    // toward max trades, skips the entry filters, and never reverses again.
+    if useSar and wasStop and tradesToday < maxTrades and not lossHit
+        [rs, rk, r1, r2, r3] = planTrade(revDir, revEntry, orH, orL, revCap)
+        if rk > 0 and revDir * (r2 - revEntry) / rk >= minRR
+            t := Trade.new(revDir, revEntry, rs, rk, r1, r2, r3, false, false, true, bar_index)
+            tradesToday += 1
+            revEvt := true
+            if revDir == 1
+                longArmed := false
+            else
+                shortArmed := false
+
+// ── Entries ────────────────────────────────────────────────────────────
+allowLong  = dirMode != "Short only"
+allowShort = dirMode != "Long only"
+canEnter   = tradesToday < maxTrades and not lossHit and not pastCutoff and not eodBar
+longFilt   = (not useVwap or close > vwapV) and (not useEma or close > emaV) and (not useRvol or rvol >= rvolMin) and widthOk
+shortFilt  = (not useVwap or close < vwapV) and (not useEma or close < emaV) and (not useRvol or rvol >= rvolMin) and widthOk
+
+longTrig  = false
+shortTrig = false
+if active and na(t)
+    // A side re-arms only after a close back inside the OR.
+    if close <= orH and close >= orL
+        longArmed := true
+        shortArmed := true
+        pendL := false
+        pendS := false
+    if allowLong
+        if longArmed and close > orH + buf
+            longArmed := false
+            if entryMode == "Close break"
+                longTrig := true
+            else
+                pendL := true
+                pendEvtL := true
+        else if pendL and low <= orH + buf and close > orH
+            pendL := false
+            longTrig := true
+    if allowShort
+        if shortArmed and close < orL - buf
+            shortArmed := false
+            if entryMode == "Close break"
+                shortTrig := true
+            else
+                pendS := true
+                pendEvtS := true
+        else if pendS and high >= orL - buf and close < orL
+            pendS := false
+            shortTrig := true
+
+if (longTrig or shortTrig) and canEnter
+    dir = longTrig ? 1 : -1
+    if dir == 1 ? longFilt : shortFilt
+        [s, rk, a, b, c] = planTrade(dir, close, orH, orL, na)
+        if rk > 0 and dir * (b - close) / rk >= minRR
+            t := Trade.new(dir, close, s, rk, a, b, c, false, false, false, bar_index)
+            tradesToday += 1
+            longEvt := dir == 1
+            shortEvt := dir == -1
+        else
+            mutedL := dir == 1
+            mutedS := dir == -1
+
+// ── Conviction score (seven tiers) ─────────────────────────────────────
+sEma  = close > emaV ? 1 : close < emaV ? -1 : 0
+sVwap = close > vwapV ? 1 : close < vwapV ? -1 : 0
+sRsi  = rsiV > 50 ? 1 : rsiV < 50 ? -1 : 0
+sMacd = macdH > 0 ? 1 : macdH < 0 ? -1 : 0
+sRvol = rvol >= rvolMin ? (close > open ? 1 : close < open ? -1 : 0) : 0
+sOr   = inSess and orState == 2 ? (close > orH ? 1 : close < orL ? -1 : 0) : 0
+sMom  = close > close[momLen] ? 1 : close < close[momLen] ? -1 : 0
+wSum  = wEma + wVwap + wRsi + wMacd + wRvol + wOr + wMom
+score = wSum > 0 ? (wEma * sEma + wVwap * sVwap + wRsi * sRsi + wMacd * sMacd + wRvol * sRvol + wOr * sOr + wMom * sMom) / wSum : 0.0
+tier  = score >= 0.75 ? 3 : score >= 0.4 ? 2 : score >= 0.15 ? 1 : score > -0.15 ? 0 : score > -0.4 ? -1 : score > -0.75 ? -2 : -3
+
+tierColor(int k) =>
+    switch k
+        3  => color.rgb(0, 200, 83)
+        2  => color.rgb(76, 175, 80)
+        1  => color.rgb(165, 214, 167)
+        0  => color.rgb(158, 158, 158)
+        -1 => color.rgb(239, 154, 154)
+        -2 => color.rgb(239, 83, 80)
+        => color.rgb(183, 28, 28)
+tierName(int k) =>
+    switch k
+        3  => "Strong bull"
+        2  => "Bull"
+        1  => "Lean bull"
+        0  => "Neutral"
+        -1 => "Lean bear"
+        -2 => "Bear"
+        => "Strong bear"
+
+orSideColor = not (inSess and orState == 2) ? na : close > orH ? color.rgb(0, 200, 83) : close < orL ? color.rgb(239, 83, 80) : color.rgb(158, 158, 158)
+barcolor(candleMode == "Conviction" ? tierColor(tier) : candleMode == "OR side" ? orSideColor : na, title = "Candle colors")
+
+// ── Plots ──────────────────────────────────────────────────────────────
+showOr = inSess and orState > 0 and not newSess
+pH = plot(showOr ? orH : na, "ORH", color.new(color.teal, 0), 2, plot.style_linebr)
+pL = plot(showOr ? orL : na, "ORL", color.new(color.maroon, 0), 2, plot.style_linebr)
+plot(showOr and showMid ? (orH + orL) / 2 : na, "OR mid", color.new(color.gray, 30), 1, plot.style_linebr)
+fill(pH, pL, color = orState == 1 ? color.new(color.yellow, 88) : color.new(color.blue, 92), title = "OR box")
+
+// Copy the levels out first so no field is read from an na trade.
+float lvEntry = na
+float lvStop  = na
+float lvTp1   = na
+float lvTp2   = na
+float lvTp3   = na
+if not na(t)
+    lvEntry := t.entry
+    lvStop  := t.stop
+    lvTp1   := t.tp1
+    lvTp2   := t.tp2
+    lvTp3   := t.tp3
+plot(showLevels ? lvEntry : na, "Entry", color.new(color.blue, 0), 1, plot.style_linebr)
+plot(showLevels ? lvStop : na, "Stop", color.new(color.red, 0), 2, plot.style_linebr)
+plot(showLevels ? lvTp1 : na, "TP1", color.new(color.green, 40), 1, plot.style_linebr)
+plot(showLevels ? lvTp2 : na, "TP2", color.new(color.green, 20), 1, plot.style_linebr)
+plot(showLevels ? lvTp3 : na, "TP3", color.new(color.green, 0), 1, plot.style_linebr)
+
+plotshape(longEvt, "Long entry", shape.triangleup, location.belowbar, color.green, text = "L", textcolor = color.green, size = size.small)
+plotshape(shortEvt, "Short entry", shape.triangledown, location.abovebar, color.red, text = "S", textcolor = color.red, size = size.small)
+plotshape(mutedL, "Long below min R:R", shape.triangleup, location.belowbar, color.new(color.gray, 50), size = size.tiny)
+plotshape(mutedS, "Short below min R:R", shape.triangledown, location.abovebar, color.new(color.gray, 50), size = size.tiny)
+plotshape(pendEvtL, "Long break, awaiting retest", shape.diamond, location.belowbar, color.new(color.green, 40), size = size.tiny)
+plotshape(pendEvtS, "Short break, awaiting retest", shape.diamond, location.abovebar, color.new(color.red, 40), size = size.tiny)
+plotshape(revEvt, "Stop-and-reverse", shape.flag, location.abovebar, color.orange, text = "SAR", textcolor = color.orange, size = size.small)
+plotshape(stopEvt, "Stop hit", shape.xcross, location.abovebar, color.red, size = size.tiny)
+plotchar(tp1Evt, "TP1 hit", "1", location.abovebar, color.green, size = size.tiny)
+plotchar(tp2Evt, "TP2 hit", "2", location.abovebar, color.green, size = size.tiny)
+plotchar(tp3Evt, "TP3 hit", "3", location.abovebar, color.green, size = size.tiny)
+plotshape(exitEvt, "Exit", shape.square, location.abovebar, color.new(color.blue, 30), size = size.tiny)
+plot(score, "Conviction score", display = display.data_window)
+
+// ── Dashboard ──────────────────────────────────────────────────────────
+dashPos = switch dashPosIn
+    "Top left"     => position.top_left
+    "Bottom right" => position.bottom_right
+    "Bottom left"  => position.bottom_left
+    => position.top_right
+var table dash = table.new(dashPos, 2, 13, bgcolor = color.new(chart.bg_color, 10), border_width = 1, border_color = color.new(chart.fg_color, 80))
+
+fmt(float v) => na(v) ? "—" : str.tostring(v, format.mintick)
+mark(bool ok) => ok ? "✓" : "✗"
+row(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color = chart.fg_color, text_size = size.small, text_halign = text.align_left)
+    table.cell(dash, 1, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+
+if showDash and barstate.islast
+    fg = chart.fg_color
+    stateTxt = not inSess ? "Out of session" : orState == 1 ? "BUILDING" : orState == 2 ? "LOCKED" : "—"
+    row(0, "ORB Suite", str.tostring(orMin) + "m OR", fg)
+    row(1, "OR state", stateTxt, orState == 2 ? color.teal : color.orange)
+    row(2, "ORH / ORL", fmt(orH) + " / " + fmt(orL), fg)
+    row(3, "Width / D-ATR", na(widthRatio) ? "—" : str.tostring(widthRatio, "#.00") + (useWidth ? " " + mark(widthOk) : ""), useWidth and not widthOk ? color.red : fg)
+    row(4, "VWAP / EMA", (close > vwapV ? "▲" : "▼") + " / " + (close > emaV ? "▲" : "▼"), fg)
+    row(5, "RVOL", str.tostring(rvol, "#.0") + "x" + (useRvol ? " " + mark(rvol >= rvolMin) : ""), fg)
+    posTxt = "Flat"
+    posCol = fg
+    if not na(t)
+        posTxt := (t.dir == 1 ? "LONG" : "SHORT") + (t.rev ? " (SAR)" : "") + " @ " + fmt(t.entry)
+        posCol := t.dir == 1 ? color.green : color.red
+    row(6, "Position", posTxt, posCol)
+    row(7, "Stop", fmt(lvStop), color.red)
+    row(8, "TP1 / TP2 / TP3", na(t) ? "—" : fmt(lvTp1) + " / " + fmt(lvTp2) + " / " + fmt(lvTp3), color.green)
+    row(9, "Trades today", str.tostring(tradesToday) + " / " + str.tostring(maxTrades), tradesToday >= maxTrades ? color.orange : fg)
+    row(10, "Day R", str.tostring(dayR, "+#.00;-#.00") + "R" + (lossHit ? " (cap hit)" : "") + (na(lastR) ? "" : "  last " + str.tostring(lastR, "+#.00;-#.00") + "R " + lastWhy), dayR >= 0 ? color.green : color.red)
+    row(11, "Conviction", tierName(tier) + " " + str.tostring(score, "+#.00;-#.00"), tierColor(tier))
+    row(12, "Timeframe", tfBad ? "Chart TF > OR length" : "OK", tfBad ? color.red : fg)
+
+// ── Alerts ─────────────────────────────────────────────────────────────
+alertcondition(lockEvt, "OR locked", "{{ticker}} opening range locked")
+alertcondition(pendEvtL, "Long break, awaiting retest", "{{ticker}} closed above ORH, waiting for a retest")
+alertcondition(pendEvtS, "Short break, awaiting retest", "{{ticker}} closed below ORL, waiting for a retest")
+alertcondition(longEvt, "Long entry", "{{ticker}} ORB long entry at {{close}}")
+alertcondition(shortEvt, "Short entry", "{{ticker}} ORB short entry at {{close}}")
+alertcondition(tp1Evt, "TP1 hit", "{{ticker}} ORB TP1 hit")
+alertcondition(tp2Evt, "TP2 hit", "{{ticker}} ORB TP2 hit")
+alertcondition(tp3Evt, "TP3 hit", "{{ticker}} ORB TP3 hit")
+alertcondition(stopEvt, "Stop hit", "{{ticker}} ORB stop hit")
+alertcondition(revEvt, "Stop-and-reverse", "{{ticker}} ORB stop-and-reverse opened")
+alertcondition(exitEvt, "Trade exit", "{{ticker}} ORB trade closed (TP3, opposite break, time or session end)")
