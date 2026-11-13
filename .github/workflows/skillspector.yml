@@ -1,0 +1,60 @@
+name: SkillSpector
+
+# Security scan of the repo's agent skills and MCP configs with NVIDIA SkillSpector
+# (https://github.com/NVIDIA/SkillSpector). Runs on every PR and push to main, and
+# weekly so existing skills are re-checked against new rules and CVE data.
+# Static analysis only (--no-llm): no API key needed and no file contents leave CI.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: skillspector-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned commit (v2.12.0). Bump deliberately; re-review the baselines when you do.
+  SKILLSPECTOR_REF: 17c4d386c6ad1a909601c2f3cd788bd3e6055001
+
+jobs:
+  scan:
+    name: scan skills and MCP configs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install SkillSpector
+        run: |
+          python -m pip install --upgrade pip
+          pip install "skillspector @ git+https://github.com/NVIDIA/SkillSpector.git@${SKILLSPECTOR_REF}"
+          skillspector --version
+      - name: Scan
+        run: scripts/skillspector_scan.sh skillspector-reports
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skillspector-reports
+          path: skillspector-reports/
+          if-no-files-found: ignore
+      - name: Upload SARIF to code scanning
+        # Needs code scanning enabled (free on public repos, GHAS on private).
+        if: always() && hashFiles('skillspector-reports/*.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: skillspector-reports
+          category: skillspector

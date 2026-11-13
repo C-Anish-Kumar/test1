@@ -226,3 +226,6 @@ reports/
 orb_bot.toml
 orb_bot.log
 STOP_ORB
+
+# SkillSpector scan output (scripts/skillspector_scan.sh)
+skillspector-reports/

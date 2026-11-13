@@ -1,0 +1,20 @@
+# SkillSpector baseline for .claude/skills/reverse-engineer-anything: reviewed findings that are accepted as false positives.
+# Each rule needs a reason. Anything not listed here fails the SkillSpector CI job.
+# Docs: https://github.com/NVIDIA/SkillSpector/blob/main/docs/SUPPRESSION.md
+version: 2
+
+rules:
+  - id: "RA2"
+    path: "references/native-and-artifacts.md"
+    message: "*plist*"
+    reason: >-
+      Reviewed 2026-11-13. Matches are prose about inspecting Apple .plist files
+      (inspect_plist / keyed archives) during analysis; the skill does not create
+      launch agents or any other persistence.
+  - id: "EA2"
+    path: "references/native-and-artifacts.md"
+    message: "*no approval*"
+    reason: >-
+      Reviewed 2026-11-13. Describes REA mounting a DMG read-only in an owned temp
+      directory for inspection ("needs no approval flag"); not an autonomous
+      high-impact action.
