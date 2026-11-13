@@ -182,10 +182,18 @@ else
     if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
       info "$name already running (pid $(cat "$pidfile"))"; return
     fi
-    # The subshell execs setsid, which (not being a group leader) execs the
-    # command: $! is then the new session's leader and its process group, and
-    # nothing is left holding this script's stdout open.
-    (cd "$wd" || exit 1; exec setsid "$@") > "$LOG_DIR/$name.log" 2>&1 < /dev/null &
+    # The subshell execs into a new session (setsid on Linux; macOS has no
+    # setsid command, so perl's POSIX::setsid there), then into the command:
+    # $! is the session's leader and its process group, and nothing is left
+    # holding this script's stdout open.
+    (
+      cd "$wd" || exit 1
+      if command -v setsid >/dev/null 2>&1; then
+        exec setsid "$@"
+      else
+        exec perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!"; exec @ARGV or die "exec: $!"' "$@"
+      fi
+    ) > "$LOG_DIR/$name.log" 2>&1 < /dev/null &
     echo $! > "$pidfile"
     info "started $name (log: $LOG_DIR/$name.log)"
   }
