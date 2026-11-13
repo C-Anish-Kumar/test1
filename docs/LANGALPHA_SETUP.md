@@ -115,6 +115,7 @@ cd web && VITE_PROXY_BACKEND=http://localhost:8000 pnpm dev
 | Migrations (122) | apply cleanly on Postgres 18 |
 | `GET /health`, `/docs` | healthy; 285 API routes |
 | Web app | loads with no page errors, opens on the setup wizard |
+| `--mode compose` | sandbox and backend images build; postgres, redis, backend and frontend come up, three report healthy (the frontend has no health check); `--stop` removes them |
 | ruff 0.15.14 (pinned in `uv.lock`) | passes |
 | Web `tsc` | passes |
 | Frontend vitest | 10,970 tests; all pass on Node 24 |
@@ -152,4 +153,6 @@ cd web && VITE_PROXY_BACKEND=http://localhost:8000 pnpm dev
 | Port 5432/6379 in use | Another Postgres/Redis is running; stop it, or set `DB_PORT` / `REDIS_PORT` in `.env`. |
 | Backend not healthy | `tail -50 ../LangAlpha/.local-run/backend.log` (dev) or `docker compose logs backend` (compose). |
 | `checkpointer: not_configured` in `/health` | Normal for a fresh local run. |
+| Compose build fails with `curl: (60) SSL certificate problem: self-signed certificate` | You are behind a TLS-inspecting proxy (corporate network, some cloud sandboxes). The images' build steps don't trust its CA; add the CA to the Dockerfiles or build on another network. |
+| Switching between dev and compose mode | Fine either way: dev mode sets `DB_HOST`/`REDIS_URL` to `localhost` in `.env`, compose mode comments them out again. |
 | Reset the database | `scripts/langalpha_setup.sh --stop`, then `docker volume rm langalpha-postgresql-data`. |
