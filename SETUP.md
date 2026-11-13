@@ -70,3 +70,8 @@ npx -y rea-agents@6.5.0 doctor --json
 To upgrade, bump the version in `.mcp.json` and refresh the skill with
 `npx rea-agents@<version> setup --client claude_code`, then copy
 `~/.claude/skills/reverse-engineer-anything` back into `.claude/skills/`.
+
+## LangAlpha
+
+To set up [LangAlpha](https://github.com/ginlix-ai/LangAlpha) alongside this repo, see
+[docs/LANGALPHA_SETUP.md](docs/LANGALPHA_SETUP.md) and run `scripts/langalpha_setup.sh`.
