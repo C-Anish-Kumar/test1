@@ -52,7 +52,11 @@ Any LLM key already exported in your shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY
 ## What the script does (dev mode)
 
 1. Clones LangAlpha and checks out the pinned commit.
-2. Creates `.env` from `.env.example`.
+2. Creates `.env` from `.env.example`, and generates a random `BYOK_ENCRYPTION_KEY` in it if
+   there is none (as upstream `make config` does). Saved accounts, API keys and secrets are
+   encrypted with it; an existing key is never replaced. It also sets `SANDBOX_PROVIDER` if
+   unset: `daytona` or `e2b` when that key is in `.env`, otherwise `docker` (local containers).
+   `agent_config.yaml` names Daytona, so without this the agent never starts.
 3. `uv sync --group dev --extra test` for the backend.
 4. `pnpm install` in `web/`, and builds the `langalpha` CLI in `cli/`.
 5. Sets `DB_HOST=localhost` and `REDIS_URL=redis://:redis@localhost:6379/0` in `.env`.
@@ -104,8 +108,9 @@ cd web && VITE_PROXY_BACKEND=http://localhost:8000 pnpm dev
 - **Self-hosted LangAlpha has no login.** Anyone who can reach ports 8000/5173 acts as you,
   including on any brokerage you connect. Both listen on all interfaces; keep the machine on a
   private network or put an authenticating proxy / VPN in front.
-- Set your own `BYOK_ENCRYPTION_KEY` in `.env` before storing real API keys or broker tokens; the
-  compose default (`langalpha-local-dev-encryption-key`) is public.
+- The script generates a unique `BYOK_ENCRYPTION_KEY` in `.env`, so the public compose default
+  (`langalpha-local-dev-encryption-key`) is never used. Keep `.env` private, and don't change the
+  key once accounts are saved: what was encrypted with the old key can no longer be read.
 - Connect brokerages read-only or paper first; live orders are opt-in per connection.
 
 ## Validation results (commit `96a3161`)
@@ -152,7 +157,8 @@ cd web && VITE_PROXY_BACKEND=http://localhost:8000 pnpm dev
 | `Docker daemon is not reachable` | Start Docker Desktop, or `sudo dockerd &` on Linux. |
 | Port 5432/6379 in use | Another Postgres/Redis is running; stop it, or set `DB_PORT` / `REDIS_PORT` in `.env`. |
 | Backend not healthy | `tail -50 ../LangAlpha/.local-run/backend.log` (dev) or `docker compose logs backend` (compose). |
-| `checkpointer: not_configured` in `/health` | Normal for a fresh local run. |
+| "Failed to send message", `checkpointer: not_configured` in `/health`, or `Failed to initialize PTC Agent: Missing required credentials ... DAYTONA_API_KEY` in the backend log | No sandbox provider is set, so the agent asks for Daytona and never starts. Rerun the script (it sets `SANDBOX_PROVIDER=docker`), or set it in `.env`, then `--stop` and start again. |
+| "Your account couldn't be saved" / "The key couldn't be saved" | `.env` has no `BYOK_ENCRYPTION_KEY`. Rerun the script (it adds one), or set `BYOK_ENCRYPTION_KEY=$(openssl rand -hex 32)` in `.env`, then `--stop` and start again. |
 | Compose build fails with `curl: (60) SSL certificate problem: self-signed certificate` | You are behind a TLS-inspecting proxy (corporate network, some cloud sandboxes). The images' build steps don't trust its CA; add the CA to the Dockerfiles or build on another network. |
 | Switching between dev and compose mode | Fine either way: dev mode sets `DB_HOST`/`REDIS_URL` to `localhost` in `.env`, compose mode comments them out again. |
 | Reset the database | `scripts/langalpha_setup.sh --stop`, then `docker volume rm langalpha-postgresql-data`. |
