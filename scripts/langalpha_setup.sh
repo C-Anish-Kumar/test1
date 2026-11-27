@@ -6,6 +6,8 @@
 #   scripts/langalpha_setup.sh --validate      # ...and then lint, type check and test suites
 #   scripts/langalpha_setup.sh --mode compose  # everything in Docker (upstream `make up`)
 #   scripts/langalpha_setup.sh --stop          # stop what this script started
+#   scripts/langalpha_setup.sh --restart       # stop, then start again (e.g. after editing .env)
+#   scripts/langalpha_setup.sh --status        # what is running, and what is configured
 set -euo pipefail
 
 REPO_URL="https://github.com/ginlix-ai/LangAlpha.git"
@@ -18,10 +20,12 @@ REF="$DEFAULT_REF"
 MODE="dev"
 VALIDATE=0
 STOP=0
+STATUS=0
+RESTART=0
 CLAUDE_CODE_EXTRA=0
 
 usage() {
-  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
   cat <<EOF
 
 Options:
@@ -31,6 +35,8 @@ Options:
   --claude-code     also install the claude-code extra (Claude Code runtime, ~290 MB)
   --validate        run lint, type check, backend and frontend tests after setup
   --stop            stop the backend, web app and database containers
+  --restart         --stop, then start again (picks up changes to .env)
+  --status          show what is running and what is configured (no changes)
 EOF
 }
 
@@ -42,6 +48,8 @@ while [[ $# -gt 0 ]]; do
     --claude-code) CLAUDE_CODE_EXTRA=1; shift ;;
     --validate) VALIDATE=1; shift ;;
     --stop) STOP=1; shift ;;
+    --restart) RESTART=1; shift ;;
+    --status) STATUS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -54,9 +62,58 @@ die()  { printf '\033[0;31m[langalpha]\033[0m %s\n' "$*" >&2; exit 1; }
 LOG_DIR="$DIR/.local-run"
 
 # --------------------------------------------------------------------------
-# --stop
+# Docker (macOS: Docker Desktop's CLI and daemon)
 # --------------------------------------------------------------------------
-if [[ $STOP -eq 1 ]]; then
+# Docker Desktop installed by dragging it into Applications does not always
+# link `docker` into the PATH, and its daemon only runs while the app does.
+DOCKER_APP_BIN="/Applications/Docker.app/Contents/Resources/bin"
+if ! command -v docker >/dev/null 2>&1 && [[ -x "$DOCKER_APP_BIN/docker" ]]; then
+  export PATH="$PATH:$DOCKER_APP_BIN"
+  warn "using Docker Desktop's docker at $DOCKER_APP_BIN (add it to your PATH to use it yourself)"
+fi
+
+ensure_docker() {
+  command -v docker >/dev/null 2>&1 || die "missing 'docker': install Docker Desktop (https://docs.docker.com/get-docker/)"
+  docker info >/dev/null 2>&1 && return 0
+  if [[ "$(uname -s)" == Darwin && -d /Applications/Docker.app ]]; then
+    info "starting Docker Desktop (it can take a minute)"
+    open -a Docker
+    for _ in $(seq 1 60); do
+      docker info >/dev/null 2>&1 && { info "Docker is running"; return 0; }
+      sleep 3
+    done
+    die "Docker Desktop did not start within 3 minutes; open it from Applications and rerun."
+  fi
+  die "Docker daemon is not reachable. Start Docker Desktop, or run 'sudo dockerd &' on Linux."
+}
+
+# --------------------------------------------------------------------------
+# --status
+# --------------------------------------------------------------------------
+if [[ $STATUS -eq 1 ]]; then
+  alive() { [[ -f "$LOG_DIR/$1.pid" ]] && kill -0 "$(cat "$LOG_DIR/$1.pid")" 2>/dev/null; }
+  yes_no() { if "$@" >/dev/null 2>&1; then echo yes; else echo no; fi; }
+  echo "LangAlpha folder:   $DIR"
+  echo "Docker running:     $(yes_no docker info)"
+  echo "Backend process:    $(yes_no alive backend)"
+  echo "Web app process:    $(yes_no alive web)"
+  echo "Backend healthy:    $(yes_no curl -sf -m 5 http://localhost:8000/health)"
+  echo "Web app answering:  $(yes_no curl -sf -m 5 http://localhost:5173/)"
+  echo "Database containers: $(docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^langalpha-(postgresql|redis)$' | tr '\n' ' ')"
+  echo "Sandbox image:      $(yes_no docker image inspect langalpha-sandbox:latest)"
+  if [[ -f "$DIR/.env" ]]; then
+    echo "Settings in .env (names only, values never shown):"
+    for k in BYOK_ENCRYPTION_KEY SANDBOX_PROVIDER ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY TAVILY_API_KEY FMP_API_KEY; do
+      if grep -qE "^${k}=.+" "$DIR/.env"; then echo "  $k: set"; else echo "  $k: -"; fi
+    done
+  fi
+  exit 0
+fi
+
+# --------------------------------------------------------------------------
+# --stop (and the first half of --restart)
+# --------------------------------------------------------------------------
+if [[ $STOP -eq 1 || $RESTART -eq 1 ]]; then
   # Each was started in its own session, so its pid is also its process group.
   # vite runs in a group of its own under pnpm, so also match anything running
   # from the clone itself, and fall back to SIGKILL for whatever ignores TERM.
@@ -85,7 +142,8 @@ if [[ $STOP -eq 1 ]]; then
     (cd "$DIR" && docker compose down 2>/dev/null) || true
   fi
   docker stop langalpha-postgresql langalpha-redis >/dev/null 2>&1 && info "stopped Postgres and Redis" || true
-  exit 0
+  [[ $RESTART -eq 1 ]] || exit 0
+  info "starting again"
 fi
 
 # --------------------------------------------------------------------------
@@ -93,8 +151,7 @@ fi
 # --------------------------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || die "missing '$1': $2"; }
 need git    "install git"
-need docker "install Docker (https://docs.docker.com/get-docker/)"
-docker info >/dev/null 2>&1 || die "Docker daemon is not reachable. Start Docker Desktop, or run 'sudo dockerd &' on Linux."
+ensure_docker
 
 if [[ "$MODE" == "dev" ]]; then
   need uv   "curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -169,6 +226,15 @@ for k in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY DEEPSEEK_API_KEY MINIMA
   if grep -qE "^${k}=.+" .env; then has_llm_key=1; fi
 done
 
+# Web search: agent_config.yaml uses Tavily (search_api: tavily), so without
+# TAVILY_API_KEY the agent's web search fails and it falls back to opening
+# known pages. A key exported in the shell is copied in like the model keys.
+if [[ -n "${TAVILY_API_KEY:-}" ]]; then
+  set_env TAVILY_API_KEY "$TAVILY_API_KEY"; info "copied TAVILY_API_KEY from your shell into .env"
+fi
+has_search_key=0
+if grep -qE '^TAVILY_API_KEY=.+' .env; then has_search_key=1; fi
+
 # --------------------------------------------------------------------------
 # Compose mode: upstream `make up`, detached
 # --------------------------------------------------------------------------
@@ -198,7 +264,29 @@ else
   info "starting Postgres + Redis and running migrations"
   ./scripts/start_db.sh
 
+  # The agent runs code in a container built from Dockerfile.sandbox. Without
+  # the image, LangAlpha builds it on the first chat message, which takes long
+  # enough that the message fails. Build it once here instead.
+  if grep -qE '^SANDBOX_PROVIDER=docker' .env && ! docker image inspect langalpha-sandbox:latest >/dev/null 2>&1; then
+    mkdir -p "$LOG_DIR"
+    info "building the agent sandbox image (first time only, about 5-15 minutes; progress: tail -f $LOG_DIR/sandbox-build.log)"
+    docker build --progress=plain -f Dockerfile.sandbox -t langalpha-sandbox:latest . > "$LOG_DIR/sandbox-build.log" 2>&1 \
+      && info "sandbox image built" \
+      || warn "sandbox image build failed (see $LOG_DIR/sandbox-build.log); LangAlpha will try again on the first chat message"
+  fi
+
   mkdir -p "$LOG_DIR"
+
+  # Something else already on 8000 or 5173 would make our server fail to start
+  # with the error only in its log; say so up front instead.
+  port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+  for spec in backend:8000:backend web:5173:"web app"; do
+    IFS=: read -r name port label <<< "$spec"
+    if ! { [[ -f "$LOG_DIR/$name.pid" ]] && kill -0 "$(cat "$LOG_DIR/$name.pid")" 2>/dev/null; } \
+        && port_busy "$port"; then
+      die "port $port is already in use by another program, so the $label can't start. Stop it (see: lsof -iTCP:$port -sTCP:LISTEN) and rerun."
+    fi
+  done
   start_bg() {  # start_bg NAME DIR CMD...
     local name="$1" wd="$2"; shift 2
     local pidfile="$LOG_DIR/$name.pid"
@@ -314,7 +402,10 @@ if [[ $VALIDATE -eq 1 ]]; then
 fi
 
 if [[ $has_llm_key -eq 0 ]]; then
-  warn "no LLM API key in .env: agents can't answer until you add one (e.g. ANTHROPIC_API_KEY) or pick a model in the web setup wizard."
+  info "models: no model API key in .env, which is fine if you connected a subscription or key in the web app; if not, open http://localhost:5173 and pick one."
+fi
+if [[ $has_search_key -eq 0 ]]; then
+  warn "web search: no TAVILY_API_KEY in .env, so the agent can't search the web. Get a free key at https://tavily.com, set TAVILY_API_KEY in $DIR/.env, then run: $0 --restart"
 fi
 warn "self-hosted LangAlpha has no login: keep it on your machine or a private network."
 info "stop everything with: $0 --stop"

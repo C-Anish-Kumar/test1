@@ -45,9 +45,16 @@ Compose mode needs only git and Docker.
 | `--ref REF` | Git ref to check out. Default is the validated commit; `--ref main` for the latest. |
 | `--dir PATH` | Clone location (or set `LANGALPHA_DIR`). |
 | `--stop` | Stops the backend, web app and database containers. |
+| `--restart` | `--stop`, then starts again. Use it after editing `.env`, which is only read at startup. |
+| `--status` | Shows what is running (Docker, backend, web app, databases, sandbox image) and which keys are set in `.env`, by name only. Changes nothing. |
 
 Any LLM key already exported in your shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `MINIMAX_API_KEY`, `ZAI_API_KEY`) is copied into `.env`.
+`GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `MINIMAX_API_KEY`, `ZAI_API_KEY`) is copied into `.env`,
+and so is `TAVILY_API_KEY` for web search.
+
+**On macOS** the script also handles Docker Desktop: if `docker` is not on your PATH (common when
+Docker Desktop was installed by dragging it into Applications), it uses the copy inside
+`/Applications/Docker.app`, and if Docker Desktop is not running it opens it and waits for it.
 
 ## What the script does (dev mode)
 
@@ -62,10 +69,16 @@ Any LLM key already exported in your shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY
 5. Sets `DB_HOST=localhost` and `REDIS_URL=redis://:redis@localhost:6379/0` in `.env`.
 6. Runs upstream `scripts/start_db.sh`: Postgres 18 and Redis 7 containers
    (`langalpha-postgresql`, `langalpha-redis`) and all Alembic migrations.
-7. Starts `uv run python server.py` and `pnpm dev` in the background. Logs and pid files go to
+7. With `SANDBOX_PROVIDER=docker`, builds the agent sandbox image (`langalpha-sandbox:latest`)
+   if it is missing: about 5–15 minutes the first time, logged to
+   `<LangAlpha>/.local-run/sandbox-build.log`. Otherwise LangAlpha builds it on the first chat
+   message, which then fails while it builds. A failed build only warns; setup carries on.
+8. Checks that ports 8000 and 5173 are free, and stops with a clear message if another program
+   holds one.
+9. Starts `uv run python server.py` and `pnpm dev` in the background. Logs and pid files go to
    `<LangAlpha>/.local-run/`.
-8. Waits for `GET /health` and the web app to answer.
-9. Installs each plugin under `langalpha_plugins/` (see [Plugins from this repo](#plugins-from-this-repo))
+10. Waits for `GET /health` and the web app to answer.
+11. Installs each plugin under `langalpha_plugins/` (see [Plugins from this repo](#plugins-from-this-repo))
    through LangAlpha's Plugins API, and re-uploads one only when its files changed.
 
 The manual equivalent, from the LangAlpha checkout:
@@ -100,7 +113,10 @@ cd web && VITE_PROXY_BACKEND=http://localhost:8000 pnpm dev
   API key, or a local model). Until then agents cannot answer, and the backend log shows a
   `MissingProviderKeyError` from the background market-insight job. That error is expected.
 - **Market data.** Without `FMP_API_KEY` it uses free Yahoo Finance data (delayed quotes).
-- **Web search.** Set one of `TAVILY_API_KEY`, `SERPER_API_KEY`, `EXA_API_KEY` in `.env`.
+- **Web search.** `agent_config.yaml` uses Tavily (`search_api: tavily`), so set `TAVILY_API_KEY`
+  in `.env` (free tier at tavily.com) and run `--restart`. Without it the agent can't search the
+  web and falls back to opening pages it already knows. Another provider's key also needs
+  `search_api` changed in `agent_config.yaml`.
 - **Sandboxes.** With no Daytona/E2B key, agent code runs in local Docker containers; the image
   `langalpha-sandbox:latest` is built on first workspace creation (or by compose mode up front).
 - Upstream's interactive wizard (`make config`) can fill in `.env` for you instead.
@@ -173,7 +189,11 @@ own folder under `langalpha_plugins/` and rerun the script.
 
 | Symptom | Fix |
 |---|---|
-| `Docker daemon is not reachable` | Start Docker Desktop, or `sudo dockerd &` on Linux. |
+| `Docker daemon is not reachable` | Start Docker Desktop, or `sudo dockerd &` on Linux. On macOS the script opens Docker Desktop itself and waits up to 3 minutes. |
+| `command not found: docker` on macOS | Docker Desktop is installed but its CLI isn't on your PATH. The script finds it on its own; for your own shell, add `export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"` to `~/.zshrc`. If `/Applications/Docker.app` doesn't exist, reinstall Docker Desktop from the `.dmg`. |
+| `port 8000 (or 5173) is already in use` | Another program is listening there. `lsof -iTCP:8000 -sTCP:LISTEN` shows which; stop it and rerun. |
+| Agent says its web/news search is down | No `TAVILY_API_KEY` in `.env`. Add one and run `--restart`. |
+| You changed `.env` but nothing changed | `.env` is read only at startup: run `--restart`. |
 | Port 5432/6379 in use | Another Postgres/Redis is running; stop it, or set `DB_PORT` / `REDIS_PORT` in `.env`. |
 | Backend not healthy | `tail -50 ../LangAlpha/.local-run/backend.log` (dev) or `docker compose logs backend` (compose). |
 | "Failed to send message", `checkpointer: not_configured` in `/health`, or `Failed to initialize PTC Agent: Missing required credentials ... DAYTONA_API_KEY` in the backend log | No sandbox provider is set, so the agent asks for Daytona and never starts. Rerun the script (it sets `SANDBOX_PROVIDER=docker`), or set it in `.env`, then `--stop` and start again. |
