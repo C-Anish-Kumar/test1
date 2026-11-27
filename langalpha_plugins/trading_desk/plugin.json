@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "trading-desk",
+  "version": "1.0.0",
+  "description": "Chart-trader tools for the agent: interactive price charts with drawing tools, overlays and indicator panes, strategy backtests with costs and stops, and volume profiles with value areas.",
+  "author": {
+    "name": "test1",
+    "url": "https://github.com/C-Anish-Kumar/test1"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "charting",
+    "backtesting",
+    "volume-profile",
+    "technical-analysis",
+    "day-trading"
+  ]
+}
