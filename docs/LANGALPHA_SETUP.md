@@ -65,6 +65,8 @@ Any LLM key already exported in your shell (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY
 7. Starts `uv run python server.py` and `pnpm dev` in the background. Logs and pid files go to
    `<LangAlpha>/.local-run/`.
 8. Waits for `GET /health` and the web app to answer.
+9. Installs each plugin under `langalpha_plugins/` (see [Plugins from this repo](#plugins-from-this-repo))
+   through LangAlpha's Plugins API, and re-uploads one only when its files changed.
 
 The manual equivalent, from the LangAlpha checkout:
 
@@ -102,6 +104,23 @@ cd web && VITE_PROXY_BACKEND=http://localhost:8000 pnpm dev
 - **Sandboxes.** With no Daytona/E2B key, agent code runs in local Docker containers; the image
   `langalpha-sandbox:latest` is built on first workspace creation (or by compose mode up front).
 - Upstream's interactive wizard (`make config`) can fill in `.env` for you instead.
+
+## Plugins from this repo
+
+`langalpha_plugins/trading_desk/` adds three skills to LangAlpha's agent, written for this repo
+(see its [README](../langalpha_plugins/trading_desk/README.md)):
+
+| Skill | Example request |
+|---|---|
+| `price-chart` | "Chart SPY 5m with VWAP, the 200 EMA and RSI, with the volume profile" |
+| `strategy-backtest` | "Backtest the VWAP + 200 EMA reclaim on SPY 5m for the last two months" |
+| `volume-profile` | "Where is the volume in NVDA this month? Give me POC and value area" |
+
+The setup script uploads it once LangAlpha is healthy; it then shows on the Plugins page, where
+it can be switched off. LangAlpha publishes skills from uploaded plugins only, so a folder copied
+into LangAlpha's own `plugins/` directory would load without its skills. To add another plugin,
+put an [Agent Plugins](https://agent-plugins.org) package (`plugin.json` plus `skills/`) in its
+own folder under `langalpha_plugins/` and rerun the script.
 
 ## Security notes
 

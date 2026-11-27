@@ -244,6 +244,50 @@ curl -sf http://localhost:5173/ >/dev/null && info "web app at http://localhost:
   || warn "web app not answering yet on :5173 (first start installs packages; check its log)"
 
 # --------------------------------------------------------------------------
+# Plugins kept in this repo (langalpha_plugins/<name>/)
+# --------------------------------------------------------------------------
+# Installed through LangAlpha's Plugins API, as an upload on the Plugins page
+# would be: LangAlpha publishes skills from uploaded plugins, not from folders
+# dropped into its own plugins/ directory. A plugin is uploaded when it is not
+# installed yet, and re-uploaded only when its files changed since the last run
+# (a hash kept in $LOG_DIR), so edits made on the Plugins page survive a rerun
+# of this script as long as the plugin itself is unchanged here.
+PLUGIN_SRC="$(dirname "$SCRIPT_DIR")/langalpha_plugins"
+if [[ -d "$PLUGIN_SRC" ]]; then
+  mkdir -p "$LOG_DIR/plugins"
+  for p in "$PLUGIN_SRC"/*/; do
+    [[ -f "$p/plugin.json" ]] || continue
+    pname="$(sed -nE 's/^ *"name": *"([^"]+)".*/\1/p' "$p/plugin.json" | head -1)"
+    [[ -n "$pname" ]] || { warn "skipped $p: plugin.json has no name"; continue; }
+    hash="$(cd "$p" && find . -type f ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z \
+      | xargs -0 cat | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-64)"
+    stamp="$LOG_DIR/plugins/$pname.sha256"
+    code="$(curl -s -o /dev/null -w '%{http_code}' "$BACKEND_URL/api/v1/plugins/$pname")"
+    if [[ "$code" == 200 && -f "$stamp" && "$(cat "$stamp")" == "$hash" ]]; then
+      info "plugin $pname is up to date"
+      continue
+    fi
+    zipf="$LOG_DIR/plugins/$pname.zip"
+    rm -f "$zipf"
+    (cd "$p" && zip -qr -X "$zipf" . -x '*/__pycache__/*' -x '__pycache__/*') \
+      || { warn "could not zip plugin $pname (is 'zip' installed?)"; continue; }
+    if [[ "$code" == 200 ]]; then
+      url="$BACKEND_URL/api/v1/plugins/$pname/update/upload"; verb=updated
+    else
+      url="$BACKEND_URL/api/v1/plugins/upload"; verb=installed
+    fi
+    resp="$LOG_DIR/plugins/$pname.response.json"
+    code="$(curl -s -o "$resp" -w '%{http_code}' -F "file=@$zipf" "$url")"
+    if [[ "$code" == 200 || "$code" == 201 ]]; then
+      echo "$hash" > "$stamp"
+      info "plugin $pname $verb (open the Plugins page to see its skills)"
+    else
+      warn "plugin $pname was not $verb (HTTP $code): $(head -c 300 "$resp")"
+    fi
+  done
+fi
+
+# --------------------------------------------------------------------------
 # Validation
 # --------------------------------------------------------------------------
 if [[ $VALIDATE -eq 1 ]]; then
